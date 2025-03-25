@@ -1,0 +1,30 @@
+{
+  "name": "tuner",
+  "version": "1.0.0",
+  "description": "",
+  "main": "parabolic_interpolation.js",
+  "scripts": {
+    "start": "webpack serve --mode development",
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development",
+    "lint": "eslint .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@babel/core": "^7.26.10",
+    "@babel/preset-env": "^7.26.9",
+    "babel-loader": "^10.0.0",
+    "eslint": "^9.23.0",
+    "html-webpack-plugin": "^5.6.3",
+    "serve": "^14.2.4",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.0"
+  },
+  "dependencies": {
+    "webfft": "^1.0.3"
+  }
+}
