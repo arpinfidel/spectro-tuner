@@ -1,0 +1,81 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Audio Visualizer and Tuner</title><style>body {
+            font-family: 'Signika', sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        .canvas-container {
+            width: 100%;
+            height: 400px;
+            background-color: rgb(16, 7, 25);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        .tuner-container {
+            display: flex;
+            width: 100%;
+            height: 400px;
+        }
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        button {
+            background-color: #6200ee;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #7c4dff;
+        }
+        button:disabled {
+            background-color: #6200ee80;
+            cursor: not-allowed;
+        }
+        .hidden {
+            display: none;
+        }
+        .text-xs {
+            font-size: 0.75rem;
+        }
+        .opacity-75 {
+            opacity: 0.75;
+        }
+        .flex {
+            display: flex;
+        }
+        .items-center {
+            align-items: center;
+        }
+        .inline-block {
+            display: inline-block;
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }</style></head><body><div class="container"><h1 id="spectrumTitle">Audio Spectrum Analyzer</h1><div class="button-container" style="margin-bottom: 20px;"><button id="enable-mic-button">Enable Microphone</button><div id="interpolation-toggle" class="hidden" style="margin-left: 20px; display: flex; align-items: center;"><input type="checkbox" id="enable-interpolation" checked="checked"> <label for="enable-interpolation" style="margin-left: 5px; color: white;">Enable Parabolic Interpolation</label></div></div><div class="canvas-container"><canvas id="spectrumCanvas"></canvas></div><div id="tunerThumbnailDiv" class="hidden"><h1>Audio Tuner</h1><button id="enable-tuner-mic-button">Enable Microphone for Tuner</button></div><div id="tunerDiv" class="hidden tuner-container"><canvas id="tunerCanvas"></canvas><canvas id="tunerCentsCanvas"></canvas></div></div><script defer="defer" src="bundle.js"></script></body></html>
