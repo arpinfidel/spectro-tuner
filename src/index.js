@@ -1,10 +1,10 @@
 import { findInterpolatedPeak } from './parabolic_interpolation.js';
-import { gaussianWindow, hanningWindow } from './window_functions.js';
+import { gaussianWindow, hanningWindow, applyWindow } from './window_functions.js';
 import Queue from 'yocto-queue';
 import webfft from 'webfft';
 
 // Constants for audio processing
-const FFT_SIZE = 4096;
+const FFT_SIZE = 4096*16;
 const HISTORY_SCALE = 1;
 const updateIntervalMs = 1000/300;
 const visualizeIntervalMs = 1000/60;
@@ -12,16 +12,16 @@ const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
 const gWindow = gaussianWindow(FFT_SIZE);
 const hWindow = hanningWindow(FFT_SIZE);
 
-// Configuration for parabolic interpolation
-let useParabolicInterpolation = true; // Default to enabled
-let usePeakInterpolation = true; // Default to enabled
-let useGaussianWindow = true; // Default to enabled
-let useHanningWindow = false; // Default to disabled
+// Default configuration for parabolic interpolation
+let useParabolicInterpolation = true;
+let usePeakInterpolation = true;
+let useGaussianWindow = false;
+let useHanningWindow = true;
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
 let th_2 = 0.0001; // Peak detection threshold
-let th_3 = 0.0001; // Magnitude filtering threshold
+let th_3 = 0.1; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
 // Initialize WebFFT
@@ -47,11 +47,8 @@ function detectBrowser() {
            userAgent.includes("Edge") ? 3 : 1;
 }
 
-
 // Pitch detection using FFT spectrum
 async function detectPitch(spectrum, sampleRate) {
-    // Using global threshold values defined at the top of the file
-
     // Convert interleaved complex FFT output to magnitudes
     const frequencyBinCount = FFT_SIZE / 2;
     const magnitudes = new Float32Array(frequencyBinCount);
@@ -109,25 +106,42 @@ async function detectPitch(spectrum, sampleRate) {
         return freqs;
     }
     
-    maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
-    // console.log("maxMagnitude", maxMagnitude)
-    maxMagnitude = Math.max(defaultMaxMagnitude, maxMagnitude);
+    freqs.sort((a, b) => b.magnitude - a.magnitude);
+    freqs = freqs.slice(0, 100);
+    // console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
+    
+    // remove subharmonics
+    // freqs = freqs.filter(f => !isSubharmonic(f.frequency, freqs.map(f => f.frequency)));
+    // console.log("freqs2", freqs)
 
+    // maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
+    // console.log("maxMagnitude", maxMagnitude)
+    const max2Magnitude = Math.max(defaultMaxMagnitude, freqs.length > 1 ? freqs[1].magnitude : 1);
     freqs = freqs.map(f => {
-        f.magnitude /= maxMagnitude;
+        f.magnitude = Math.min(1, f.magnitude / max2Magnitude);
         return f;
     })
-    
+    // console.log("freqs2", JSON.parse(JSON.stringify(freqs)))
+    freqs = freqs.map(f => {
+        f.magnitude = f.magnitude ** 2;
+        return f;
+    });
+    // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
     freqs = freqs.filter(f => f.magnitude >= th_3)
+
+    const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
+    if (minMagnitude < 1) {
+        freqs = freqs.map(f => {
+            f.magnitude = (f.magnitude - minMagnitude) / (1 - minMagnitude);
+            f.magnitude = f.magnitude * 0.8 + 0.2;
+            return f;
+        })
+    }
     
     freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
     freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.slice(0, 30);
-    freqs = freqs.map(f => {
-        f.magnitude = f.magnitude*f.magnitude
-        return f;
-    })
-
+    
     return freqs;
 }
 
@@ -143,13 +157,10 @@ const createPitchTracker = (historySize, sampleRate) => {
         const C0 = 16.3515978313;
         return Math.floor(Math.log2(frequency / C0));
     }
-    
+
     async function detectPitchAndOctave(signal) {
-        // Convert to interleaved complex format
         const complexSignal = prepareComplexArray(signal);
-        // Run FFT
-        const spectrum = fft.fft(complexSignal);
-        
+        const spectrum = fft.fft(complexSignal);        
         const frequencies = await detectPitch(spectrum, sampleRate, 0.07);
         
         if (frequencies.length == 0) {
@@ -289,9 +300,7 @@ async function initializeAudioAnalyzer() {
     gainNode.gain.value = detectBrowser();
     console.log(analyzer, gainNode.gain.value);
     
-    analyzer.smoothingTimeConstant = 0;
     source.connect(gainNode).connect(analyzer);
-    analyzer.fftSize = FFT_SIZE;
     
     return {
         analyser: analyzer,
@@ -302,9 +311,19 @@ async function initializeAudioAnalyzer() {
 function getAudioData(analyzer) {
     const timeData = new Float32Array(FFT_SIZE);
     analyzer.getFloatTimeDomainData(timeData);
+    
+    // Apply selected window function
+    if (useGaussianWindow) {
+        return applyWindow(timeData, gWindow);
+    } else if (useHanningWindow) {
+        return applyWindow(timeData, hWindow);
+    }
+    
+    // Default to no window if none selected
     return timeData;
 }
 
+// Convert to interleaved complex format
 function prepareComplexArray(realSamples) {
     const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
     for (let i = 0; i < FFT_SIZE; i++) {
@@ -316,6 +335,11 @@ function prepareComplexArray(realSamples) {
 
 // Initialize spectrum analyzer
 async function initializeSpectrumAnalyzer() {
+    // Ensure at least one window function is selected
+    if (!useGaussianWindow && !useHanningWindow) {
+        useGaussianWindow = true;
+        document.getElementById("gaussian-window").checked = true;
+    }
     try {
         // Initialize audio
         const {analyser, sampleRate} = await initializeAudioAnalyzer();

@@ -5,7 +5,7 @@ import { gaussianWindow, hanningWindow } from './window_functions.js';
 
 // Constants for visualization
 const HISTORY_SCALE = 1;
-const CIRCLE_RADIUS = 1.5;
+const CIRCLE_RADIUS = 2;
 const BACKGROUND_COLOR = "rgb(16,7,25)";
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -34,10 +34,6 @@ function getPosition(values, height, min, max, exponent = 2) {
 function drawBackground() {
     if (!bgCanvas || !bgCtx) return;
     
-    // Clear background canvas
-    // bgCtx.fillStyle = BACKGROUND_COLOR;
-    // bgCtx.fillRect(0, 0, historySize * HISTORY_SCALE, bgCanvas.height);
-    
     const notePositions = getPosition(
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 
         bgCanvas.height, -0.5, 11.5, 1
@@ -51,7 +47,7 @@ function drawBackground() {
     
     // Draw note labels
     for (let i = 0; i < notePositions.length; i++) {
-        bgCtx.fillStyle = "rgba(208, 215, 222, 0.5)";
+        bgCtx.fillStyle = "rgba(208, 215, 222, 1)";
         bgCtx.fillText(
             `${NOTE_NAMES[i]}`, 
             10, 
@@ -78,7 +74,7 @@ function drawDynamicElements(state) {
     mainCtx.fillRect(mainCanvas.width - shiftAmount, 0, 
         shiftAmount, mainCanvas.height);
 
-    for (let i = 0; i < state.fHistory.length - 1; i++) {
+    for (let i = 0; i < state.fHistory.length; i++) {
         if (state.fHistory[i] === null || state.fHistory[i].length == 0) continue;
         
         const freqs = state.fHistory[i];
@@ -92,7 +88,7 @@ function drawDynamicElements(state) {
             mainCtx.beginPath();
             mainCtx.fillStyle = `hsla(${hue}, 100%, 70%, ${freqs[j].magnitude})`;
             mainCtx.arc(
-                mainCanvas.width - CIRCLE_RADIUS * 2,
+                mainCanvas.width - i,
                 mainCanvas.height - ((noteClass + 0.5)%12) / 12 * mainCanvas.height,
                 CIRCLE_RADIUS,
                 0,
@@ -107,7 +103,7 @@ function renderVisualization(state) {
     // Draw circles first (main content)
     drawDynamicElements(state);
     // Then draw semi-transparent background on top
-    drawBackground();
+    // drawBackground();
 }
 
 // Initialize the canvas when it's transferred to the worker
