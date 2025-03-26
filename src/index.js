@@ -1,4 +1,5 @@
 import { findInterpolatedPeak } from './parabolic_interpolation.js';
+import { gaussianWindow } from './window_functions.js';
 import webfft from 'webfft';
 
 // Constants for audio processing
@@ -8,10 +9,12 @@ const CIRCLE_RADIUS = 1.5;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "C"];
 const BACKGROUND_COLOR = "rgb(16,7,25)";
+const gWindow = gaussianWindow(FFT_SIZE);
 
 // Configuration for parabolic interpolation
 let useParabolicInterpolation = true; // Default to enabled
 let usePeakInterpolation = true; // Default to enabled
+let useGaussianWindow = true; // Default to enabled
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
@@ -56,6 +59,14 @@ async function detectPitch(signal, sampleRate) {
         channelData[i] = (signal[i]-128.0) / 128.0;
     }
     
+    // Apply Gaussian window to the signal before FFT
+    // This reduces spectral leakage and improves frequency resolution
+    if (useGaussianWindow) {
+        for (let i = 0; i < signal.length; i++) {
+            channelData[i] = channelData[i] * gWindow[i];
+        }
+    }
+    
     // Create an analyzer node
     const analyser = tempContext.createAnalyser();
     analyser.fftSize = FFT_SIZE;
@@ -76,7 +87,7 @@ async function detectPitch(signal, sampleRate) {
     const frequencyData = new Float32Array(frequencyBinCount);
     analyser.getFloatFrequencyData(frequencyData);
     
-    // Convert to magnitudes and find max
+    // Convert to magnitudes
     const magnitudes = new Float32Array(frequencyBinCount);
     for (let i = 0; i < frequencyBinCount; i++) {
         magnitudes[i] = Math.pow(10, frequencyData[i] / 20);
@@ -363,6 +374,9 @@ async function initializeSpectrumAnalyzer() {
         });
         document.getElementById("peak-interpolation").addEventListener("change", function(e) {
             usePeakInterpolation = e.target.checked;
+        });
+        document.getElementById("gaussian-window").addEventListener("change", function(e) {
+            useGaussianWindow = e.target.checked;
         });
         
         // Add event listeners for threshold sliders

@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run build before commit
+npm run build
+
+# Add dist folder to git staging
+git add dist/
