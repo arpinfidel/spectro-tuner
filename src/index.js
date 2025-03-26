@@ -14,10 +14,10 @@ let useParabolicInterpolation = true; // Default to enabled
 let usePeakInterpolation = true; // Default to enabled
 
 // Threshold values for pitch detection
-let th_1 = 0.001; // Minimum magnitude threshold
-let th_2 = 0.002; // Peak detection threshold
-let th_3 = 0.005; // Magnitude filtering threshold
-let defaultMaxMagnitude = 0.0015; // Default maximum magnitude
+let th_1 = 0.0001; // Minimum magnitude threshold
+let th_2 = 0.0001; // Peak detection threshold
+let th_3 = 0.0001; // Magnitude filtering threshold
+let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
 
 // Prevent screen from sleeping
@@ -242,6 +242,17 @@ function renderVisualization(ctx, historySize, canvas, state) {
     ctx.fillStyle = BACKGROUND_COLOR;
     ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
     
+    
+    const notePositions = getPosition(
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 
+        canvas.height, -0.5, 12.5, 1
+    );
+    
+    for (let i = 0; i < notePositions.length; i++) {
+        ctx.fillStyle = "#D0D7DE";
+        ctx.fillRect(50, canvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
+    }
+    
     // Draw frequency history
     for (let i = 0; i < state.fHistory.length; i++) {
         if (state.fHistory[i] === null) {
@@ -269,12 +280,6 @@ function renderVisualization(ctx, historySize, canvas, state) {
         }
     }
     
-    // Draw note grid
-    const notePositions = getPosition(
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 
-        canvas.height, -0.5, 12.5, 1
-    );
-    
     for (let i = 0; i < notePositions.length; i++) {
         ctx.fillStyle = "#D0D7DE";
         ctx.fillText(
@@ -282,7 +287,6 @@ function renderVisualization(ctx, historySize, canvas, state) {
             10, 
             canvas.height - notePositions[i] + 7
         );
-        ctx.fillRect(50, canvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
     }
     
     if (state.currentFs) {
@@ -362,22 +366,41 @@ async function initializeSpectrumAnalyzer() {
         });
         
         // Add event listeners for threshold sliders
-        document.getElementById("th-1-slider").addEventListener("input", function(e) {
+        const th1Slider = document.getElementById("th-1-slider");
+        const th2Slider = document.getElementById("th-2-slider");
+        const th3Slider = document.getElementById("th-3-slider");
+        const maxMagnitudeSlider = document.getElementById("max-magnitude-slider");
+        
+        // Set initial values from JavaScript variables
+        th1Slider.value = th_1;
+        document.getElementById("th-1-value").textContent = th_1.toFixed(4);
+        
+        th2Slider.value = th_2;
+        document.getElementById("th-2-value").textContent = th_2.toFixed(4);
+        
+        th3Slider.value = th_3;
+        document.getElementById("th-3-value").textContent = th_3.toFixed(4);
+        
+        maxMagnitudeSlider.value = defaultMaxMagnitude;
+        document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
+        
+        // Add event listeners for slider changes
+        th1Slider.addEventListener("input", function(e) {
             th_1 = parseFloat(e.target.value);
             document.getElementById("th-1-value").textContent = th_1.toFixed(4);
         });
         
-        document.getElementById("th-2-slider").addEventListener("input", function(e) {
+        th2Slider.addEventListener("input", function(e) {
             th_2 = parseFloat(e.target.value);
             document.getElementById("th-2-value").textContent = th_2.toFixed(4);
         });
         
-        document.getElementById("th-3-slider").addEventListener("input", function(e) {
+        th3Slider.addEventListener("input", function(e) {
             th_3 = parseFloat(e.target.value);
             document.getElementById("th-3-value").textContent = th_3.toFixed(4);
         });
         
-        document.getElementById("max-magnitude-slider").addEventListener("input", function(e) {
+        maxMagnitudeSlider.addEventListener("input", function(e) {
             defaultMaxMagnitude = parseFloat(e.target.value);
             document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
         });
