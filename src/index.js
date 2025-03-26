@@ -129,14 +129,14 @@ async function detectPitch(spectrum, sampleRate) {
     // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
     freqs = freqs.filter(f => f.magnitude >= th_3)
 
-    const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
-    if (minMagnitude < 1) {
-        freqs = freqs.map(f => {
-            f.magnitude = (f.magnitude - minMagnitude) / (1 - minMagnitude);
-            f.magnitude = f.magnitude * 0.8 + 0.2;
-            return f;
-        })
-    }
+    // const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
+    // if (minMagnitude < 1) {
+    //     freqs = freqs.map(f => {
+    //         f.magnitude = (f.magnitude - minMagnitude) / (1 - minMagnitude);
+    //         // f.magnitude = f.magnitude * 0.8 + 0.2;
+    //         return f;
+    //     })
+    // }
     
     freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
     freqs.sort((a, b) => b.magnitude - a.magnitude);

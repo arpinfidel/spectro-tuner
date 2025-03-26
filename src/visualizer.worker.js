@@ -1,11 +1,8 @@
 // Worker script for handling visualization with OffscreenCanvas
 
-// Import required functions
-import { gaussianWindow, hanningWindow } from './window_functions.js';
-
 // Constants for visualization
 const HISTORY_SCALE = 1;
-const CIRCLE_RADIUS = 2;
+const CIRCLE_RADIUS = 1.5;
 const BACKGROUND_COLOR = "rgb(16,7,25)";
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
