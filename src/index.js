@@ -3,7 +3,7 @@ import webfft from 'webfft';
 
 // Constants for audio processing
 const FFT_SIZE = 4096*2;
-const HISTORY_SCALE = 2;
+const HISTORY_SCALE = 1.5;
 const CIRCLE_RADIUS = 1.5;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "C"];
@@ -12,6 +12,12 @@ const BACKGROUND_COLOR = "rgb(16,7,25)";
 // Configuration for parabolic interpolation
 let useParabolicInterpolation = true; // Default to enabled
 let usePeakInterpolation = true; // Default to enabled
+
+// Threshold values for pitch detection
+let th_1 = 0.001; // Minimum magnitude threshold
+let th_2 = 0.002; // Peak detection threshold
+let th_3 = 0.005; // Magnitude filtering threshold
+let defaultMaxMagnitude = 0.0015; // Default maximum magnitude
 
 
 // Prevent screen from sleeping
@@ -36,6 +42,8 @@ function detectBrowser() {
 
 // Pitch detection using autocorrelation with subharmonic filtering
 async function detectPitch(signal, sampleRate) {
+    // Using global threshold values defined at the top of the file
+
     // Create a temporary audio context for processing
     const tempContext = new OfflineAudioContext(1, FFT_SIZE, sampleRate);
     
@@ -45,7 +53,7 @@ async function detectPitch(signal, sampleRate) {
     
     // Copy signal data to the buffer
     for (let i = 0; i < signal.length; i++) {
-        channelData[i] = signal[i] / 128.0;
+        channelData[i] = (signal[i]-128.0) / 128.0;
     }
     
     // Create an analyzer node
@@ -76,7 +84,7 @@ async function detectPitch(signal, sampleRate) {
 
     let maxMagnitude = Math.max(...magnitudes);
     console.log("maxMagnitude", maxMagnitude)
-    if (maxMagnitude < 0.001) {
+    if (maxMagnitude < th_1) {
         return [];
     }
 
@@ -85,7 +93,7 @@ async function detectPitch(signal, sampleRate) {
     if (useParabolicInterpolation) {
         const findPeaks = (start, end, conditionFn) => {
             for (let i = start; i < end; i++) {
-                if (!conditionFn(i) || magnitudes[i] < 0.002) {
+                if (!conditionFn(i) || magnitudes[i] < th_2) {
                     continue;
                 }
                 const peak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
@@ -124,7 +132,7 @@ async function detectPitch(signal, sampleRate) {
     
     maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
     console.log("maxMagnitude", maxMagnitude)
-    maxMagnitude = Math.max(0.0015, maxMagnitude);
+    maxMagnitude = Math.max(defaultMaxMagnitude, maxMagnitude);
 
     freqs = freqs.map(f => {
         f.magnitude /= maxMagnitude;
@@ -132,7 +140,7 @@ async function detectPitch(signal, sampleRate) {
     })
     
     freqs = freqs.map(f => {
-        if (f.magnitude < 0.005) {
+        if (f.magnitude < th_3) {
             f.magnitude = 0.0000001;
         }
         return f;
@@ -279,7 +287,7 @@ function renderVisualization(ctx, historySize, canvas, state) {
     
     if (state.currentFs) {
         ctx.fillText(
-            `f0 [Hz]: ${state.currentFs && state.currentFs.slice(0, 2).map(f => Math.round(f.frequency)).join(", ")}`, 
+            `f[Hz]: ${state.currentFs && state.currentFs.slice(0, 2).map(f => Math.round(f.frequency)).join(", ")}`, 
             canvas.width - 150, 
             20
         );
@@ -322,7 +330,7 @@ function getAudioData(analyzer) {
     const timeData = new Uint8Array(FFT_SIZE);
     analyzer.getByteTimeDomainData(timeData);
     
-    const signal = Array.from(timeData).map(value => value - 128);
+    const signal = Array.from(timeData);
     
     return signal;
 }
@@ -351,6 +359,27 @@ async function initializeSpectrumAnalyzer() {
         });
         document.getElementById("peak-interpolation").addEventListener("change", function(e) {
             usePeakInterpolation = e.target.checked;
+        });
+        
+        // Add event listeners for threshold sliders
+        document.getElementById("th-1-slider").addEventListener("input", function(e) {
+            th_1 = parseFloat(e.target.value);
+            document.getElementById("th-1-value").textContent = th_1.toFixed(4);
+        });
+        
+        document.getElementById("th-2-slider").addEventListener("input", function(e) {
+            th_2 = parseFloat(e.target.value);
+            document.getElementById("th-2-value").textContent = th_2.toFixed(4);
+        });
+        
+        document.getElementById("th-3-slider").addEventListener("input", function(e) {
+            th_3 = parseFloat(e.target.value);
+            document.getElementById("th-3-value").textContent = th_3.toFixed(4);
+        });
+        
+        document.getElementById("max-magnitude-slider").addEventListener("input", function(e) {
+            defaultMaxMagnitude = parseFloat(e.target.value);
+            document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
         });
         
         // setupRecording(canvas, audioStream);
