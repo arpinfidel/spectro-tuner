@@ -13,6 +13,7 @@ const BACKGROUND_COLOR = "rgb(16,7,25)";
 
 // Configuration for parabolic interpolation
 let useParabolicInterpolation = true; // Default to enabled
+let usePeakInterpolation = true; // Default to enabled
 
 // Check if microphone permission was previously granted
 async function checkMicrophonePermission() {
@@ -112,29 +113,39 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
     if (useParabolicInterpolation) {
         // const minPeakHeight = 0
         // // First identify local maxima in the spectrum with improved sensitivity for vibrato
-        // const localMaxima = [];
+        const localMaxima = [];
         
-        // // Find local maxima (peaks) in the spectrum with enhanced sensitivity
-        // for (let i = 2; i < frequencyBinCount - 2; i++) {
-        //     // Enhanced peak detection that's more sensitive to rapid changes
-        //     if (magnitudes[i] > magnitudes[i-1] && 
-        //         magnitudes[i] > magnitudes[i+1] && 
-        //         magnitudes[i] > minPeakHeight) {
-        //         localMaxima.push(i);
-        //     }
-        // }
-        
-        // Apply parabolic interpolation to refine peak locations
-        for (let i = 1; i < frequencyBinCount; i++) {
-            if (magnitudes[i] < 0.003) {
-                continue;
+        if (usePeakInterpolation) {
+            // Find local maxima (peaks) in the spectrum with enhanced sensitivity
+            for (let i = 2; i < frequencyBinCount - 2; i++) {
+                // Enhanced peak detection that's more sensitive to rapid changes
+                if (magnitudes[i] > magnitudes[i-1] && 
+                    magnitudes[i] > magnitudes[i+1]) {
+                    localMaxima.push(i);
+                }
             }
-            // for (const peakIndex of localMaxima) {
-            const interpolatedPeak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
-            if (interpolatedPeak.frequency < 20 || interpolatedPeak.frequency > 22000) {
-                continue;
+            
+            for (const i of localMaxima) {
+                if (magnitudes[i] < 0.002) {
+                    continue;
+                }
+                const interpolatedPeak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
+                if (interpolatedPeak.frequency < 20 || interpolatedPeak.frequency > 22000) {
+                    continue;
+                }
+                peaks.push(interpolatedPeak);
             }
-            peaks.push(interpolatedPeak);
+        } else {
+            for (let i = 1; i < frequencyBinCount; i++) {
+                if (magnitudes[i] < 0.003) {
+                    continue;
+                }
+                const interpolatedPeak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
+                if (interpolatedPeak.frequency < 20 || interpolatedPeak.frequency > 22000) {
+                    continue;
+                }
+                peaks.push(interpolatedPeak);
+            }
         }
     } else {
         // Use simple peak detection without interpolation
@@ -550,6 +561,10 @@ async function initializeSpectrumAnalyzer() {
         document.getElementById("enable-interpolation").addEventListener("change", function(e) {
             useParabolicInterpolation = e.target.checked;
             console.log("Parabolic interpolation:", useParabolicInterpolation ? "enabled" : "disabled");
+        });
+        document.getElementById("peak-interpolation").addEventListener("change", function(e) {
+            usePeakInterpolation = e.target.checked;
+            console.log("Parabolic interpolation:", usePeakInterpolation ? "enabled" : "disabled");
         });
         
         // setupRecording(canvas, audioStream);
