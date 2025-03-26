@@ -158,12 +158,7 @@ async function detectPitch(signal, sampleRate) {
         return f;
     })
     
-    freqs = freqs.map(f => {
-        if (f.magnitude < th_3) {
-            f.magnitude = 0.0000001;
-        }
-        return f;
-    })
+    freqs = freqs.filter(f => f.magnitude >= th_3)
 
     freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
@@ -238,80 +233,124 @@ const createPitchTracker = (historySize, sampleRate) => {
     };
 };
 
-// Set up canvas with proper dimensions
+// Set up canvas with proper dimensions and transfer to worker if supported
 function setupCanvas(canvasId) {
     const canvas = document.getElementById(canvasId);
-    const ctx = canvas.getContext("2d");
     
     canvas.style.width = "100%";
     canvas.style.height = "100%";
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
-    ctx.font = "20px Signika";
     
-    return {
-        canvas,
-        ctx
-    };
+    // Check if OffscreenCanvas is supported
+    if ('transferControlToOffscreen' in canvas) {
+        // Create a worker for rendering
+        const worker = new Worker(new URL('./visualizer.worker.js', import.meta.url), { type: 'module' });
+        
+        // Transfer canvas control to the worker
+        const offscreen = canvas.transferControlToOffscreen();
+        const historySize = calculateHistorySize(canvas.width);
+        
+        worker.postMessage({
+            type: 'init',
+            canvas: offscreen,
+            historySize: historySize
+        }, [offscreen]);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const width = canvas.offsetWidth;
+            const height = canvas.offsetHeight;
+            const historySize = calculateHistorySize(width);
+            
+            worker.postMessage({
+                type: 'resize',
+                width: width,
+                height: height,
+                historySize: historySize
+            });
+        });
+        
+        return {
+            canvas,
+            worker,
+            isOffscreen: true
+        };
+    } else {
+        // Fallback to regular canvas if OffscreenCanvas is not supported
+        const ctx = canvas.getContext("2d");
+        ctx.font = "20px Signika";
+        
+        return {
+            canvas,
+            ctx,
+            isOffscreen: false
+        };
+    }
 }
 
-// Draw visualization components
-function renderVisualization(ctx, historySize, canvas, state) {
-    // Clear canvas
-    ctx.fillStyle = BACKGROUND_COLOR;
-    ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
-    
-    const notePositions = getPosition(
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 
-        canvas.height, -0.5, 11.5, 1
-    );
-    
-    for (let i = 0; i < notePositions.length; i++) {
-        ctx.fillStyle = "#D0D7DE";
-        ctx.fillRect(50, canvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
-    }
-    
-    // Draw frequency history
-    for (let i = 0; i < state.fHistory.length; i++) {
-        if (state.fHistory[i] === null) {
-            continue;
+// Draw visualization components - handles both OffscreenCanvas and regular canvas
+function renderVisualization(canvasInfo, historySize, state) {
+    if (canvasInfo.isOffscreen) {
+        // Send state to worker for rendering
+        canvasInfo.worker.postMessage({
+            type: 'render',
+            data: {
+                state: state
+            }
+        });
+    } else {
+        // Fallback to rendering on main thread if OffscreenCanvas is not supported
+        const { ctx, canvas } = canvasInfo;
+        
+        // Clear canvas
+        ctx.fillStyle = BACKGROUND_COLOR;
+        ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
+        
+        const notePositions = getPosition(
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 
+            canvas.height, -0.5, 11.5, 1
+        );
+        
+        for (let i = 0; i < notePositions.length; i++) {
+            ctx.fillStyle = "#D0D7DE";
+            ctx.fillRect(50, canvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
         }
         
-        const freqs = state.fHistory[i];
-        const midiNotes = frequencyToMidiNotes(freqs);
-        const noteClasses = getNoteClasses(midiNotes);
-        const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));
-        for (let j = 0; j < midiNotes.length; j++) {
-            const hue = hues[j];
-            const noteClass = noteClasses[j];
-            ctx.beginPath();
-            ctx.fillStyle = `hsla(${hue}, 100%, 70%, ${freqs[j].magnitude})`;
-            ctx.arc(
-                i * HISTORY_SCALE + 4 * HISTORY_SCALE, 
-                canvas.height - ((noteClass + 0.5)%12) / 12 * canvas.height, 
-                CIRCLE_RADIUS, 
-                0, 
-                2 * Math.PI
-            );
-            ctx.fill();
+        // Draw frequency history
+        for (let i = 0; i < state.fHistory.length; i++) {
+            if (state.fHistory[i] === null) {
+                continue;
+            }
+            
+            const freqs = state.fHistory[i];
+            const midiNotes = frequencyToMidiNotes(freqs);
+            const noteClasses = getNoteClasses(midiNotes);
+            const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));
+            for (let j = 0; j < midiNotes.length; j++) {
+                const hue = hues[j];
+                const noteClass = noteClasses[j];
+                ctx.beginPath();
+                ctx.fillStyle = `hsla(${hue}, 100%, 70%, ${freqs[j].magnitude})`;
+                ctx.arc(
+                    i * HISTORY_SCALE + 4 * HISTORY_SCALE, 
+                    canvas.height - ((noteClass + 0.5)%12) / 12 * canvas.height, 
+                    CIRCLE_RADIUS, 
+                    0, 
+                    2 * Math.PI
+                );
+                ctx.fill();
+            }
         }
-    }
-    
-    for (let i = 0; i < notePositions.length; i++) {
-        ctx.fillStyle = "#D0D7DE";
-        ctx.fillText(
-            `${NOTE_NAMES[i]}${state.currentOctave}`, 
-            10, 
-            canvas.height - notePositions[i] + 7
-        );
-    }
-    
-    if (state.currentFs) {
-        ctx.fillText(
-            `f[Hz]: ${state.currentFs && state.currentFs.slice(0, 2).map(f => Math.round(f.frequency)).join(", ")}`, 
-            canvas.width - 150, 
-            20
-        );
+        
+        for (let i = 0; i < notePositions.length; i++) {
+            ctx.fillStyle = "#D0D7DE";
+            ctx.fillText(
+                `${NOTE_NAMES[i]}${state.currentOctave}`, 
+                10, 
+                canvas.height - notePositions[i] + 7
+            );
+        }
     }
 }
 
@@ -363,8 +402,8 @@ async function initializeSpectrumAnalyzer() {
         const {analyser, sampleRate} = await initializeAudioAnalyzer();
         await preventScreenSleep();
         
-        // Set up canvas
-        const {canvas, ctx} = setupCanvas("spectrumCanvas");
+        // Set up canvas with OffscreenCanvas if supported
+        const canvasInfo = setupCanvas("spectrumCanvas");
         
         // Hide mic button, show record button and set up recording
         document.getElementById("enable-mic-button").style.display = "none";
@@ -440,7 +479,7 @@ async function initializeSpectrumAnalyzer() {
         // setupRecording(canvas, audioStream);
         
         // Initialize pitch tracker
-        const historySize = calculateHistorySize(canvas.width);
+        const historySize = calculateHistorySize(canvasInfo.canvas.width);
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
         // Use setInterval for higher frame rates (potentially >60 FPS)
@@ -454,11 +493,10 @@ async function initializeSpectrumAnalyzer() {
         update();
 
         let visualize = async function() {
-            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
+            renderVisualization(canvasInfo, historySize, pitchTracker.state);
             setTimeout(visualize, visualizeIntervalMs);
         };
         visualize();
-        // Run animation at 5ms intervals (theoretical 200 FPS)
     } catch (error) {
         localStorage.setItem("micPermission", "no");
         const micButton = document.getElementById("enable-mic-button");
