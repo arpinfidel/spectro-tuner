@@ -1,20 +1,24 @@
 import { findInterpolatedPeak } from './parabolic_interpolation.js';
-import { gaussianWindow } from './window_functions.js';
+import { gaussianWindow, hanningWindow } from './window_functions.js';
 import webfft from 'webfft';
 
 // Constants for audio processing
-const FFT_SIZE = 4096*2;
-const HISTORY_SCALE = 1.5;
+const FFT_SIZE = 4096;
+const HISTORY_SCALE = 1;
 const CIRCLE_RADIUS = 1.5;
+const updateIntervalMs = 1000/300;
+const visualizationIntervalMs = 1000/60;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "C"];
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const BACKGROUND_COLOR = "rgb(16,7,25)";
 const gWindow = gaussianWindow(FFT_SIZE);
+const hWindow = hanningWindow(FFT_SIZE);
 
 // Configuration for parabolic interpolation
 let useParabolicInterpolation = true; // Default to enabled
 let usePeakInterpolation = true; // Default to enabled
 let useGaussianWindow = true; // Default to enabled
+let useHanningWindow = false; // Default to disabled
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
@@ -59,11 +63,15 @@ async function detectPitch(signal, sampleRate) {
         channelData[i] = (signal[i]-128.0) / 128.0;
     }
     
-    // Apply Gaussian window to the signal before FFT
+    // Apply window function to the signal before FFT
     // This reduces spectral leakage and improves frequency resolution
     if (useGaussianWindow) {
         for (let i = 0; i < signal.length; i++) {
             channelData[i] = channelData[i] * gWindow[i];
+        }
+    } else if (useHanningWindow) {
+        for (let i = 0; i < signal.length; i++) {
+            channelData[i] = channelData[i] * hWindow[i];
         }
     }
     
@@ -94,7 +102,7 @@ async function detectPitch(signal, sampleRate) {
     }
 
     let maxMagnitude = Math.max(...magnitudes);
-    console.log("maxMagnitude", maxMagnitude)
+    // console.log("maxMagnitude", maxMagnitude)
     if (maxMagnitude < th_1) {
         return [];
     }
@@ -142,7 +150,7 @@ async function detectPitch(signal, sampleRate) {
     }
     
     maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
-    console.log("maxMagnitude", maxMagnitude)
+    // console.log("maxMagnitude", maxMagnitude)
     maxMagnitude = Math.max(defaultMaxMagnitude, maxMagnitude);
 
     freqs = freqs.map(f => {
@@ -253,10 +261,9 @@ function renderVisualization(ctx, historySize, canvas, state) {
     ctx.fillStyle = BACKGROUND_COLOR;
     ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
     
-    
     const notePositions = getPosition(
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 
-        canvas.height, -0.5, 12.5, 1
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 
+        canvas.height, -0.5, 11.5, 1
     );
     
     for (let i = 0; i < notePositions.length; i++) {
@@ -273,16 +280,15 @@ function renderVisualization(ctx, historySize, canvas, state) {
         const freqs = state.fHistory[i];
         const midiNotes = frequencyToMidiNotes(freqs);
         const noteClasses = getNoteClasses(midiNotes);
-        const hues = noteClasses.map(noteClass => noteClass * (360 / 12));
-        
+        const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));
         for (let j = 0; j < midiNotes.length; j++) {
             const hue = hues[j];
             const noteClass = noteClasses[j];
             ctx.beginPath();
-            ctx.fillStyle = `hsla(${hue}, 100%, 50%, ${freqs[j].magnitude})`;
+            ctx.fillStyle = `hsla(${hue}, 100%, 70%, ${freqs[j].magnitude})`;
             ctx.arc(
                 i * HISTORY_SCALE + 4 * HISTORY_SCALE, 
-                canvas.height - (noteClass + 0.5) / (12.5 + 0.5) * canvas.height, 
+                canvas.height - ((noteClass + 0.5)%12) / 12 * canvas.height, 
                 CIRCLE_RADIUS, 
                 0, 
                 2 * Math.PI
@@ -294,7 +300,7 @@ function renderVisualization(ctx, historySize, canvas, state) {
     for (let i = 0; i < notePositions.length; i++) {
         ctx.fillStyle = "#D0D7DE";
         ctx.fillText(
-            `${NOTE_NAMES[i]}${i == 12 ? state.currentOctave + 1 : state.currentOctave}`, 
+            `${NOTE_NAMES[i]}${state.currentOctave}`, 
             10, 
             canvas.height - notePositions[i] + 7
         );
@@ -377,6 +383,18 @@ async function initializeSpectrumAnalyzer() {
         });
         document.getElementById("gaussian-window").addEventListener("change", function(e) {
             useGaussianWindow = e.target.checked;
+            if (useGaussianWindow && document.getElementById("hanning-window").checked) {
+                document.getElementById("hanning-window").checked = false;
+                useHanningWindow = false;
+            }
+        });
+        
+        document.getElementById("hanning-window").addEventListener("change", function(e) {
+            useHanningWindow = e.target.checked;
+            if (useHanningWindow && document.getElementById("gaussian-window").checked) {
+                document.getElementById("gaussian-window").checked = false;
+                useGaussianWindow = false;
+            }
         });
         
         // Add event listeners for threshold sliders
@@ -425,12 +443,22 @@ async function initializeSpectrumAnalyzer() {
         const historySize = calculateHistorySize(canvas.width);
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
-        let animate = function() {
+        // Use setInterval for higher frame rates (potentially >60 FPS)
+        // Store the interval ID for potential cleanup
+        let updateInterval;
+        let visualizationInterval;
+        
+        let update = function() {
             const signal = getAudioData(analyser);
             pitchTracker.updateState(signal);
-            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
-            requestAnimationFrame(animate);
         };
+        let visualize = function() {
+            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
+        };
+        
+        // Run animation at 5ms intervals (theoretical 200 FPS)
+        updateInterval = setInterval(update, updateIntervalMs);
+        visualizationInterval = setInterval(visualize, visualizationIntervalMs);
 
         // Start animation loop
         requestAnimationFrame(animate);

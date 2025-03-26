@@ -21,6 +21,21 @@ function gaussianWindow(length, alpha = 2.5) {
 }
 
 /**
+ * Creates a Hanning window function
+ * @param {number} length - Length of the window
+ * @returns {Float32Array} - Hanning window function values
+ */
+function hanningWindow(length) {
+    const window = new Float32Array(length);
+    
+    for (let i = 0; i < length; i++) {
+        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (length - 1)));
+    }
+    
+    return window;
+}
+
+/**
  * Applies a window function to a signal
  * @param {Float32Array|Uint8Array} signal - Input signal
  * @param {Float32Array} window - Window function
@@ -59,4 +74,4 @@ function logScaleSpectrum(magnitudes) {
     
 }
 
-export { gaussianWindow, applyWindow, logScaleSpectrum };
+export { gaussianWindow, hanningWindow, applyWindow, logScaleSpectrum };
