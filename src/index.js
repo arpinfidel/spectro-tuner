@@ -35,7 +35,7 @@ function detectBrowser() {
 
 
 // Pitch detection using autocorrelation with subharmonic filtering
-async function detectPitch(signal, sampleRate, threshold = 0.1) {
+async function detectPitch(signal, sampleRate) {
     // Create a temporary audio context for processing
     const tempContext = new OfflineAudioContext(1, FFT_SIZE, sampleRate);
     
@@ -70,48 +70,22 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
     
     // Convert to magnitudes and find max
     const magnitudes = new Float32Array(frequencyBinCount);
-    
-    let maxMagnitude = 0;
     for (let i = 0; i < frequencyBinCount; i++) {
         magnitudes[i] = Math.pow(10, frequencyData[i] / 20);
-        maxMagnitude = Math.max(maxMagnitude, magnitudes[i]);
     }
+
+    let maxMagnitude = Math.max(...magnitudes);
     console.log("maxMagnitude", maxMagnitude)
     if (maxMagnitude < 0.001) {
         return [];
     }
 
     // Find peaks in the frequency domain
-    let peaks = [];
-    
+    let freqs = [];
     if (useParabolicInterpolation) {
-        // const minPeakHeight = 0
-        // // First identify local maxima in the spectrum with improved sensitivity for vibrato
-        const localMaxima = [];
-        
-        if (usePeakInterpolation) {
-            // Find local maxima (peaks) in the spectrum with enhanced sensitivity
-            for (let i = 2; i < frequencyBinCount - 2; i++) {
-                // Enhanced peak detection that's more sensitive to rapid changes
-                if (magnitudes[i] > magnitudes[i-1] && 
-                    magnitudes[i] > magnitudes[i+1]) {
-                    localMaxima.push(i);
-                }
-            }
-            
-            for (const i of localMaxima) {
-                if (magnitudes[i] < 0.002) {
-                    continue;
-                }
-                const interpolatedPeak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
-                if (interpolatedPeak.frequency < 20 || interpolatedPeak.frequency > 22000) {
-                    continue;
-                }
-                peaks.push(interpolatedPeak);
-            }
-        } else {
-            for (let i = 1; i < frequencyBinCount; i++) {
-                if (magnitudes[i] < 0.002) {
+        const findPeaks = (start, end, conditionFn) => {
+            for (let i = start; i < end; i++) {
+                if (!conditionFn(i) || magnitudes[i] < 0.002) {
                     continue;
                 }
                 const peak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
@@ -122,49 +96,58 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
                 ) {
                     continue;
                 }
-                peaks.push(peak);
+                freqs.push(peak);
             }
+        };
+
+        if (usePeakInterpolation) {
+            findPeaks(2, frequencyBinCount - 2,
+                i =>
+                    magnitudes[i] > magnitudes[i-1]
+                    && magnitudes[i] > magnitudes[i+1]
+            );
+        } else {
+            findPeaks(1, frequencyBinCount, () => true);
         }
     } else {
-        // Use simple peak detection without interpolation
-        // Skip the first few bins (DC and very low frequencies)
         for (let i = 1; i < frequencyBinCount; i++) {
             const frequency = i * sampleRate / FFT_SIZE;
-            peaks.push({
+            freqs.push({
                 frequency: frequency,
                 magnitude: magnitudes[i]
             });
         }
     }
-    if (peaks.length == 0) {
-        return peaks;
+    if (freqs.length == 0) {
+        return freqs;
     }
     
-    maxMagnitude = Math.max(...peaks.map(f => f.magnitude));
+    maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
     console.log("maxMagnitude", maxMagnitude)
     maxMagnitude = Math.max(0.0015, maxMagnitude);
-    peaks = peaks.map(f => {
+
+    freqs = freqs.map(f => {
         f.magnitude /= maxMagnitude;
         return f;
     })
     
-    peaks = peaks.map(f => {
+    freqs = freqs.map(f => {
         if (f.magnitude < 0.005) {
             f.magnitude = 0.0000001;
         }
         return f;
     })
 
-    peaks.sort((a, b) => b.magnitude - a.magnitude);
-    peaks = peaks.filter(peak => !isNaN(peak.frequency) && !isNaN(peak.magnitude));
-    peaks = peaks.slice(0, 30);
-    peaks = peaks.map(f => {
+    freqs.sort((a, b) => b.magnitude - a.magnitude);
+    freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
+    freqs = freqs.slice(0, 30);
+    freqs = freqs.map(f => {
         f.magnitude = f.magnitude*f.magnitude
         return f;
     })
 
     // Return the strongest frequency, or 0 if none found
-    return peaks;
+    return freqs;
 }
 
 // Convert frequency to MIDI note number
@@ -206,23 +189,17 @@ const createPitchTracker = (historySize, sampleRate) => {
         return [octave, frequencies];
     }
 
-    async function updateState(signal, power) {
+    async function updateState(signal) {
         const [octave, frequencies] = await detectPitchAndOctave(signal);
+        if (state.fHistory.length >= historySize) {
+            state.fHistory.shift();
+        }
         if (frequencies.length > 0) {
-            state.currentFs = frequencies;
-            
-            if (state.fHistory.length >= historySize) {
-                state.fHistory.shift();
-            }
-            
             state.fHistory.push(frequencies);
+            state.currentFs = frequencies;
             
             state.currentOctave = Math.round(octave) || state.currentOctave;
         } else {
-            if (state.fHistory.length >= historySize) {
-                state.fHistory.shift();
-            }
-            
             state.fHistory.push(null);
             state.currentFs = null;
         }
@@ -337,7 +314,6 @@ async function initializeAudioAnalyzer() {
     return {
         analyser: analyzer,
         sampleRate: audioContext.sampleRate,
-        audioStream: stream
     };
 }
 
@@ -347,124 +323,15 @@ function getAudioData(analyzer) {
     analyzer.getByteTimeDomainData(timeData);
     
     const signal = Array.from(timeData).map(value => value - 128);
-    const power = Math.sqrt(signal.reduce((sum, value) => sum + value ** 2, 0)) / signal.length;
     
-    return {
-        signal,
-        power
-    };
-}
-
-// Set up recording functionality
-function setupRecording(canvas, audioStream) {
-    const recordButton = document.getElementById("record-button");
-    const MAX_RECORDING_SECONDS = 60;
-    let mediaRecorder = null;
-    let recordedChunks = [];
-    let startTime;
-    let countdownInterval;
-    
-    const toggleRecording = () => {
-        if (!mediaRecorder || mediaRecorder.state === "inactive") {
-            // Start recording
-            recordedChunks = [];
-            
-            // Create MediaRecorder
-            const canvasStream = canvas.captureStream();
-            const audioTracks = audioStream.getAudioTracks();
-            const combinedStream = new MediaStream();
-            
-            canvasStream.getVideoTracks().forEach(track => {
-                combinedStream.addTrack(track);
-            });
-            
-            audioTracks.forEach(track => {
-                combinedStream.addTrack(track);
-            });
-            
-            mediaRecorder = new MediaRecorder(combinedStream, {
-                mimeType: "video/webm; codecs=vp8,opus"
-            });
-            
-            mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) {
-                    recordedChunks.push(event.data);
-                }
-            };
-            
-            mediaRecorder.onstop = () => {
-                clearInterval(countdownInterval);
-                recordButton.innerHTML = 'Processing... <span class="inline-block animate-spin">⌛</span>';
-                recordButton.disabled = true;
-                
-                const webmBlob = new Blob(recordedChunks, {
-                    type: "video/webm"
-                });
-                
-                const videoUrl = URL.createObjectURL(webmBlob);
-                recordButton.disabled = false;
-                recordButton.innerText = "Download";
-                
-                const handleDownload = () => {
-                    const downloadLink = document.getElementById("download-button");
-                    if (downloadLink instanceof HTMLAnchorElement) {
-                        downloadLink.style.display = "none";
-                        downloadLink.href = videoUrl;
-                        downloadLink.download = "recording.webm";
-                        downloadLink.click();
-                        URL.revokeObjectURL(videoUrl);
-                        
-                        setTimeout(() => {
-                            recordButton.innerHTML = 'Record <span class="text-xs opacity-75 flex items-center">(max 60s)</span>';
-                            mediaRecorder = null;
-                            recordButton.addEventListener("click", toggleRecording);
-                        }, 1000);
-                    }
-                };
-                
-                recordButton.removeEventListener("click", toggleRecording);
-                recordButton.addEventListener("click", handleDownload, {
-                    once: true
-                });
-            };
-            
-            mediaRecorder.start();
-            startTime = Date.now();
-            
-            countdownInterval = window.setInterval(() => {
-                const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
-                const remainingSeconds = MAX_RECORDING_SECONDS - elapsedSeconds;
-                
-                if (remainingSeconds <= 0 && mediaRecorder) {
-                    mediaRecorder.stop();
-                } else {
-                    recordButton.innerText = `Stop (${String(remainingSeconds)}s)`;
-                }
-            }, 1000);
-            
-            recordButton.innerText = `Stop (${String(MAX_RECORDING_SECONDS)}s)`;
-        } else if (mediaRecorder.state === "recording") {
-            // Stop recording
-            mediaRecorder.stop();
-        }
-    };
-    
-    recordButton.addEventListener("click", toggleRecording);
+    return signal;
 }
 
 // Initialize spectrum analyzer
 async function initializeSpectrumAnalyzer() {
     try {
-        // Animation function
-        let animate = function() {
-            const {signal, power} = getAudioData(analyser);
-            pitchTracker.updateState(signal, power);
-            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
-            requestAnimationFrame(animate);
-        };
-        
         // Initialize audio
-        const {analyser, sampleRate, audioStream} = await initializeAudioAnalyzer();
+        const {analyser, sampleRate} = await initializeAudioAnalyzer();
         await preventScreenSleep();
         
         // Set up canvas
@@ -481,20 +348,24 @@ async function initializeSpectrumAnalyzer() {
         // Add event listener for interpolation toggle
         document.getElementById("enable-interpolation").addEventListener("change", function(e) {
             useParabolicInterpolation = e.target.checked;
-            console.log("Parabolic interpolation:", useParabolicInterpolation ? "enabled" : "disabled");
         });
         document.getElementById("peak-interpolation").addEventListener("change", function(e) {
             usePeakInterpolation = e.target.checked;
-            console.log("Parabolic interpolation:", usePeakInterpolation ? "enabled" : "disabled");
         });
         
         // setupRecording(canvas, audioStream);
         
         // Initialize pitch tracker
         const historySize = calculateHistorySize(canvas.width);
-        console.log("N_HISTORY", historySize);
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
+        let animate = function() {
+            const signal = getAudioData(analyser);
+            pitchTracker.updateState(signal);
+            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
+            requestAnimationFrame(animate);
+        };
+
         // Start animation loop
         requestAnimationFrame(animate);
     } catch (error) {
@@ -510,7 +381,7 @@ async function initializeSpectrumAnalyzer() {
 // Initialize application
 document.addEventListener('DOMContentLoaded', async () => {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        await navigator.mediaDevices.getUserMedia({ audio: true });
         localStorage.setItem("micPermission", "yes");
         
         initializeSpectrumAnalyzer();
