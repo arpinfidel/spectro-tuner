@@ -7,7 +7,7 @@ const FFT_SIZE = 4096;
 const HISTORY_SCALE = 1;
 const CIRCLE_RADIUS = 1.5;
 const updateIntervalMs = 1000/300;
-const visualizationIntervalMs = 1000/60;
+const visualizeIntervalMs = 1000/60;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const BACKGROUND_COLOR = "rgb(16,7,25)";
@@ -445,23 +445,20 @@ async function initializeSpectrumAnalyzer() {
         
         // Use setInterval for higher frame rates (potentially >60 FPS)
         // Store the interval ID for potential cleanup
-        let updateInterval;
-        let visualizationInterval;
         
-        let update = function() {
+        let update = async function() {
             const signal = getAudioData(analyser);
-            pitchTracker.updateState(signal);
+            await pitchTracker.updateState(signal);
+            setTimeout(update, updateIntervalMs);
         };
-        let visualize = function() {
-            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
-        };
-        
-        // Run animation at 5ms intervals (theoretical 200 FPS)
-        updateInterval = setInterval(update, updateIntervalMs);
-        visualizationInterval = setInterval(visualize, visualizationIntervalMs);
+        update();
 
-        // Start animation loop
-        requestAnimationFrame(animate);
+        let visualize = async function() {
+            renderVisualization(ctx, historySize, canvas, pitchTracker.state);
+            setTimeout(visualize, visualizeIntervalMs);
+        };
+        visualize();
+        // Run animation at 5ms intervals (theoretical 200 FPS)
     } catch (error) {
         localStorage.setItem("micPermission", "no");
         const micButton = document.getElementById("enable-mic-button");
