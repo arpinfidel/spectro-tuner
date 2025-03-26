@@ -2,11 +2,9 @@ import { findInterpolatedPeak } from './parabolic_interpolation.js';
 import webfft from 'webfft';
 
 // Constants for audio processing
-const FFT_SIZE = 4096*4;
-const POWER_THRESHOLD = 0.01;
+const FFT_SIZE = 4096*2;
 const HISTORY_SCALE = 2;
 const CIRCLE_RADIUS = 1.5;
-const OCTAVE_HISTORY_LENGTH = 5;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B", "C"];
 const BACKGROUND_COLOR = "rgb(16,7,25)";
@@ -15,23 +13,6 @@ const BACKGROUND_COLOR = "rgb(16,7,25)";
 let useParabolicInterpolation = true; // Default to enabled
 let usePeakInterpolation = true; // Default to enabled
 
-// Check if microphone permission was previously granted
-async function checkMicrophonePermission() {
-    if (localStorage.getItem("micPermission") === "yes") {
-        try {
-            return (await navigator.permissions.query({
-                name: "microphone"
-            })).state === "granted" ? true : (
-                console.error("New session detected, please enable the microphone again."),
-                false
-            );
-        } catch {
-            return console.error("You are on Firefox, need to enable mic manually again."),
-            false;
-        }
-    }
-    return false;
-}
 
 // Prevent screen from sleeping
 async function preventScreenSleep() {
@@ -52,16 +33,9 @@ function detectBrowser() {
            userAgent.includes("Edge") ? 3 : 1;
 }
 
-// Helper function to check for subharmonic artifacts
-function isSubharmonic(frequency, frequencies, tolerance = 0.08) {
-    return false;
-}
 
 // Pitch detection using autocorrelation with subharmonic filtering
 async function detectPitch(signal, sampleRate, threshold = 0.1) {
-    const fft = new Float32Array(FFT_SIZE);
-    const fftData = new Float32Array(FFT_SIZE);
-    
     // Create a temporary audio context for processing
     const tempContext = new OfflineAudioContext(1, FFT_SIZE, sampleRate);
     
@@ -137,14 +111,18 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
             }
         } else {
             for (let i = 1; i < frequencyBinCount; i++) {
-                if (magnitudes[i] < 0.003) {
+                if (magnitudes[i] < 0.002) {
                     continue;
                 }
-                const interpolatedPeak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
-                if (interpolatedPeak.frequency < 20 || interpolatedPeak.frequency > 22000) {
+                const peak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
+                if (peak.frequency < 20
+                    || peak.frequency > 22000
+                    || isNaN(peak.frequency)
+                    || isNaN(peak.magnitude)
+                ) {
                     continue;
                 }
-                peaks.push(interpolatedPeak);
+                peaks.push(peak);
             }
         }
     } else {
@@ -158,22 +136,13 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
             });
         }
     }
+    if (peaks.length == 0) {
+        return peaks;
+    }
     
-    // for (let i = 0; i < frequencyBinCount; i++) {
-    //     if (magnitudes[i] < 0.00005) {
-    //         magnitudes[i] = 0.0000001;
-    //     }
-    // }
-    
-    // // Normalize magnitudes if we have valid data
-    // if (maxMagnitude > 0 && isFinite(maxMagnitude)) {
-    //     for (let i = 0; i < frequencyBinCount; i++) {
-    //         magnitudes[i] /= maxMagnitude;
-    //     }
-    // }
-    maxMagnitude = 0.015;
     maxMagnitude = Math.max(...peaks.map(f => f.magnitude));
-
+    console.log("maxMagnitude", maxMagnitude)
+    maxMagnitude = Math.max(0.0015, maxMagnitude);
     peaks = peaks.map(f => {
         f.magnitude /= maxMagnitude;
         return f;
@@ -186,21 +155,13 @@ async function detectPitch(signal, sampleRate, threshold = 0.1) {
         return f;
     })
 
-    // Sort peaks by magnitude (strongest first)
     peaks.sort((a, b) => b.magnitude - a.magnitude);
-
-    // Filter out NaN values from peaks
     peaks = peaks.filter(peak => !isNaN(peak.frequency) && !isNaN(peak.magnitude));
-                
     peaks = peaks.slice(0, 30);
-    
     peaks = peaks.map(f => {
         f.magnitude = f.magnitude*f.magnitude
         return f;
     })
-
-
-    console.log("peaks", peaks)
 
     // Return the strongest frequency, or 0 if none found
     return peaks;
@@ -216,22 +177,22 @@ function getNoteClasses(midiNotes) {
     return midiNotes.map(midiNote => midiNote % 12);
 }
 
-// Scale values for visualization
-function scaleValues(values, height, min, max, exponent = 2) {
+function getPosition(values, height, min, max, exponent = 2) {
     return values.map(value => height * ((value - min) / (max - min)) ** exponent);
 }
 
 // Create state manager for pitch tracking
 const createPitchTracker = (historySize, sampleRate) => {
     const state = {
-        f0History: [],
-        f0PowerHistory: [],
-        octaveHistory: [],
-        currentOctaveHistory: [],
+        fHistory: [],
         currentOctave: 1,
         currentFs: []
     };
 
+    function getOctave(frequency) {
+        const C0 = 16.3515978313;
+        return Math.floor(Math.log2(frequency / C0));
+    }
     async function detectPitchAndOctave(signal) {
         const frequencies = await detectPitch(signal, sampleRate, 0.07);
         
@@ -239,16 +200,8 @@ const createPitchTracker = (historySize, sampleRate) => {
             return [state.currentOctave, []];
         }
         
-        let octave = state.currentOctave;
-        // Check which octave the frequency belongs to
-        for (let oct = 1; oct <= 7; oct++) {
-            const minFreq = 32.703195662574764 * Math.pow(2, oct - 1);
-            const maxFreq = minFreq * Math.pow(2, 1);
-            
-            if (frequencies >= minFreq && frequencies <= maxFreq) {
-                octave = oct;
-            }
-        }
+        // TODO: do for each note
+        let octave = getOctave(frequencies[0].frequency);
         
         return [octave, frequencies];
     }
@@ -256,40 +209,21 @@ const createPitchTracker = (historySize, sampleRate) => {
     async function updateState(signal, power) {
         const [octave, frequencies] = await detectPitchAndOctave(signal);
         if (frequencies.length > 0) {
-        //if (!isNaN(power) && power >= POWER_THRESHOLD) {
-            console.log("frequencies", frequencies);
-            
             state.currentFs = frequencies;
             
-            if (state.f0History.length >= historySize) {
-                state.f0History.shift();
-                state.f0PowerHistory.shift();
-                state.octaveHistory.shift();
+            if (state.fHistory.length >= historySize) {
+                state.fHistory.shift();
             }
             
-            state.f0History.push(frequencies);
-            state.f0PowerHistory.push(Math.min(10 * power, 1));
-            state.octaveHistory.push(octave);
+            state.fHistory.push(frequencies);
             
-            if (state.currentOctaveHistory.length >= OCTAVE_HISTORY_LENGTH) {
-                state.currentOctaveHistory.shift();
-            }
-            
-            state.currentOctaveHistory.push(octave || state.currentOctave);
-            state.currentOctave = Math.round(
-                state.currentOctaveHistory.reduce((sum, value) => sum + value, 0) / 
-                state.currentOctaveHistory.length
-            ) || state.currentOctave;
+            state.currentOctave = Math.round(octave) || state.currentOctave;
         } else {
-            if (state.f0History.length >= historySize) {
-                state.f0History.shift();
-                state.f0PowerHistory.shift();
-                state.octaveHistory.shift();
+            if (state.fHistory.length >= historySize) {
+                state.fHistory.shift();
             }
             
-            state.f0History.push(null);
-            state.f0PowerHistory.push(null);
-            state.octaveHistory.push(null);
+            state.fHistory.push(null);
             state.currentFs = null;
         }
     }
@@ -299,15 +233,6 @@ const createPitchTracker = (historySize, sampleRate) => {
         updateState
     };
 };
-
-// Clear and hide an element
-function clearElement(elementId) {
-    const element = document.getElementById(elementId);
-    element.style.display = "none";
-    while (element.firstChild) {
-        element.removeChild(element.firstChild);
-    }
-}
 
 // Set up canvas with proper dimensions
 function setupCanvas(canvasId) {
@@ -319,8 +244,6 @@ function setupCanvas(canvasId) {
     canvas.width = canvas.offsetWidth;
     canvas.height = canvas.offsetHeight;
     ctx.font = "20px Signika";
-    
-    console.log("canvas.width", canvas.width);
     
     return {
         canvas,
@@ -335,14 +258,12 @@ function renderVisualization(ctx, historySize, canvas, state) {
     ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
     
     // Draw frequency history
-    for (let i = 0; i < state.f0History.length; i++) {
-        if (state.f0History[i] === null || 
-            state.f0PowerHistory[i] === null || 
-            state.octaveHistory[i] === null) {
+    for (let i = 0; i < state.fHistory.length; i++) {
+        if (state.fHistory[i] === null) {
             continue;
         }
         
-        const freqs = state.f0History[i];
+        const freqs = state.fHistory[i];
         const midiNotes = frequencyToMidiNotes(freqs);
         const noteClasses = getNoteClasses(midiNotes);
         const hues = noteClasses.map(noteClass => noteClass * (360 / 12));
@@ -364,7 +285,7 @@ function renderVisualization(ctx, historySize, canvas, state) {
     }
     
     // Draw note grid
-    const notePositions = scaleValues(
+    const notePositions = getPosition(
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 
         canvas.height, -0.5, 12.5, 1
     );
@@ -409,7 +330,7 @@ async function initializeAudioAnalyzer() {
     gainNode.gain.value = detectBrowser();
     console.log(analyzer, gainNode.gain.value);
     
-    analyzer.smoothingTimeConstant = 1;
+    analyzer.smoothingTimeConstant = 0;
     source.connect(gainNode).connect(analyzer);
     analyzer.fftSize = FFT_SIZE;
     
