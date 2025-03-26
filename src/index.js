@@ -1,16 +1,14 @@
 import { findInterpolatedPeak } from './parabolic_interpolation.js';
 import { gaussianWindow, hanningWindow } from './window_functions.js';
+import Queue from 'yocto-queue';
 import webfft from 'webfft';
 
 // Constants for audio processing
 const FFT_SIZE = 4096;
 const HISTORY_SCALE = 1;
-const CIRCLE_RADIUS = 1.5;
 const updateIntervalMs = 1000/300;
 const visualizeIntervalMs = 1000/60;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const BACKGROUND_COLOR = "rgb(16,7,25)";
 const gWindow = gaussianWindow(FFT_SIZE);
 const hWindow = hanningWindow(FFT_SIZE);
 
@@ -26,6 +24,9 @@ let th_2 = 0.0001; // Peak detection threshold
 let th_3 = 0.0001; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
+// Initialize WebFFT
+const fft = new webfft(FFT_SIZE);
+fft.profile(); // Profile to find fastest implementation
 
 // Prevent screen from sleeping
 async function preventScreenSleep() {
@@ -47,58 +48,17 @@ function detectBrowser() {
 }
 
 
-// Pitch detection using autocorrelation with subharmonic filtering
-async function detectPitch(signal, sampleRate) {
+// Pitch detection using FFT spectrum
+async function detectPitch(spectrum, sampleRate) {
     // Using global threshold values defined at the top of the file
 
-    // Create a temporary audio context for processing
-    const tempContext = new OfflineAudioContext(1, FFT_SIZE, sampleRate);
-    
-    // Create a buffer with our signal data
-    const audioBuffer = tempContext.createBuffer(1, signal.length, sampleRate);
-    const channelData = audioBuffer.getChannelData(0);
-    
-    // Copy signal data to the buffer
-    for (let i = 0; i < signal.length; i++) {
-        channelData[i] = (signal[i]-128.0) / 128.0;
-    }
-    
-    // Apply window function to the signal before FFT
-    // This reduces spectral leakage and improves frequency resolution
-    if (useGaussianWindow) {
-        for (let i = 0; i < signal.length; i++) {
-            channelData[i] = channelData[i] * gWindow[i];
-        }
-    } else if (useHanningWindow) {
-        for (let i = 0; i < signal.length; i++) {
-            channelData[i] = channelData[i] * hWindow[i];
-        }
-    }
-    
-    // Create an analyzer node
-    const analyser = tempContext.createAnalyser();
-    analyser.fftSize = FFT_SIZE;
-    analyser.smoothingTimeConstant = 0;
-    
-    // Create a source node from our buffer and connect to the analyzer
-    const source = tempContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(analyser);
-    source.connect(tempContext.destination);
-    
-    // Start the source and wait for rendering to complete
-    source.start(0);
-    await tempContext.startRendering();
-    
-    // Get frequency data
-    const frequencyBinCount = analyser.frequencyBinCount;
-    const frequencyData = new Float32Array(frequencyBinCount);
-    analyser.getFloatFrequencyData(frequencyData);
-    
-    // Convert to magnitudes
+    // Convert interleaved complex FFT output to magnitudes
+    const frequencyBinCount = FFT_SIZE / 2;
     const magnitudes = new Float32Array(frequencyBinCount);
     for (let i = 0; i < frequencyBinCount; i++) {
-        magnitudes[i] = Math.pow(10, frequencyData[i] / 20);
+        const real = spectrum[i*2];
+        const imag = spectrum[i*2 + 1];
+        magnitudes[i] = Math.sqrt(real*real + imag*imag);
     }
 
     let maxMagnitude = Math.max(...magnitudes);
@@ -159,31 +119,16 @@ async function detectPitch(signal, sampleRate) {
     })
     
     freqs = freqs.filter(f => f.magnitude >= th_3)
-
-    freqs.sort((a, b) => b.magnitude - a.magnitude);
+    
     freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
+    freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.slice(0, 30);
     freqs = freqs.map(f => {
         f.magnitude = f.magnitude*f.magnitude
         return f;
     })
 
-    // Return the strongest frequency, or 0 if none found
     return freqs;
-}
-
-// Convert frequency to MIDI note number
-function frequencyToMidiNotes(frequencies) {
-    return frequencies.map(frequency => frequency.frequency > 31 ? 12 * Math.log2(frequency.frequency / 440) + 69 : 0);
-}
-
-// Get note class (0-11) from MIDI note number
-function getNoteClasses(midiNotes) {
-    return midiNotes.map(midiNote => midiNote % 12);
-}
-
-function getPosition(values, height, min, max, exponent = 2) {
-    return values.map(value => height * ((value - min) / (max - min)) ** exponent);
 }
 
 // Create state manager for pitch tracking
@@ -198,8 +143,14 @@ const createPitchTracker = (historySize, sampleRate) => {
         const C0 = 16.3515978313;
         return Math.floor(Math.log2(frequency / C0));
     }
+    
     async function detectPitchAndOctave(signal) {
-        const frequencies = await detectPitch(signal, sampleRate, 0.07);
+        // Convert to interleaved complex format
+        const complexSignal = prepareComplexArray(signal);
+        // Run FFT
+        const spectrum = fft.fft(complexSignal);
+        
+        const frequencies = await detectPitch(spectrum, sampleRate, 0.07);
         
         if (frequencies.length == 0) {
             return [state.currentOctave, []];
@@ -235,33 +186,49 @@ const createPitchTracker = (historySize, sampleRate) => {
 
 // Set up canvas with proper dimensions and transfer to worker if supported
 function setupCanvas(canvasId) {
-    const canvas = document.getElementById(canvasId);
+    const mainCanvas = document.getElementById(canvasId);
+    const bgCanvas = document.getElementById(`${canvasId}Background`);
     
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    if (!mainCanvas || !bgCanvas) {
+        console.error('Canvas elements not found');
+        return null;
+    }
     
-    // Check if OffscreenCanvas is supported
-    if ('transferControlToOffscreen' in canvas) {
+    mainCanvas.style.width = "100%";
+    mainCanvas.style.height = "100%";
+    mainCanvas.width = mainCanvas.offsetWidth;
+    mainCanvas.height = mainCanvas.offsetHeight;
+    bgCanvas.style.width = "100%";
+    bgCanvas.style.height = "100%";
+    bgCanvas.width = bgCanvas.offsetWidth;
+    bgCanvas.height = bgCanvas.offsetHeight;
+    
+    // Check if OffscreenCanvas is supported for main canvas
+    if ('transferControlToOffscreen' in mainCanvas) {
         // Create a worker for rendering
         const worker = new Worker(new URL('./visualizer.worker.js', import.meta.url), { type: 'module' });
         
-        // Transfer canvas control to the worker
-        const offscreen = canvas.transferControlToOffscreen();
-        const historySize = calculateHistorySize(canvas.width);
+        // Transfer both canvases to the worker
+        const mainOffscreen = mainCanvas.transferControlToOffscreen();
+        const bgOffscreen = bgCanvas.transferControlToOffscreen();
+        const historySize = calculateHistorySize(mainCanvas.width);
         
         worker.postMessage({
             type: 'init',
-            canvas: offscreen,
+            mainCanvas: mainOffscreen,
+            bgCanvas: bgOffscreen,
             historySize: historySize
-        }, [offscreen]);
+        }, [mainOffscreen, bgOffscreen]);
         
         // Handle window resize
         window.addEventListener('resize', () => {
-            const width = canvas.offsetWidth;
-            const height = canvas.offsetHeight;
+            const width = mainCanvas.offsetWidth;
+            const height = mainCanvas.offsetHeight;
             const historySize = calculateHistorySize(width);
+            
+            // Resize canvas
+            mainCanvas.width = width;
+            mainCanvas.height = height;
             
             worker.postMessage({
                 type: 'resize',
@@ -272,17 +239,17 @@ function setupCanvas(canvasId) {
         });
         
         return {
-            canvas,
+            canvas: mainCanvas,
             worker,
             isOffscreen: true
         };
     } else {
         // Fallback to regular canvas if OffscreenCanvas is not supported
-        const ctx = canvas.getContext("2d");
+        const ctx = mainCanvas.getContext("2d");
         ctx.font = "20px Signika";
         
         return {
-            canvas,
+            canvas: mainCanvas,
             ctx,
             isOffscreen: false
         };
@@ -291,67 +258,14 @@ function setupCanvas(canvasId) {
 
 // Draw visualization components - handles both OffscreenCanvas and regular canvas
 function renderVisualization(canvasInfo, historySize, state) {
-    if (canvasInfo.isOffscreen) {
-        // Send state to worker for rendering
-        canvasInfo.worker.postMessage({
-            type: 'render',
-            data: {
-                state: state
-            }
-        });
-    } else {
-        // Fallback to rendering on main thread if OffscreenCanvas is not supported
-        const { ctx, canvas } = canvasInfo;
-        
-        // Clear canvas
-        ctx.fillStyle = BACKGROUND_COLOR;
-        ctx.fillRect(0, 0, historySize * HISTORY_SCALE, canvas.height);
-        
-        const notePositions = getPosition(
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 
-            canvas.height, -0.5, 11.5, 1
-        );
-        
-        for (let i = 0; i < notePositions.length; i++) {
-            ctx.fillStyle = "#D0D7DE";
-            ctx.fillRect(50, canvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
+    // Send state to worker for rendering
+    canvasInfo.worker.postMessage({
+        type: 'render',
+        data: {
+            state: state
         }
-        
-        // Draw frequency history
-        for (let i = 0; i < state.fHistory.length; i++) {
-            if (state.fHistory[i] === null) {
-                continue;
-            }
-            
-            const freqs = state.fHistory[i];
-            const midiNotes = frequencyToMidiNotes(freqs);
-            const noteClasses = getNoteClasses(midiNotes);
-            const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));
-            for (let j = 0; j < midiNotes.length; j++) {
-                const hue = hues[j];
-                const noteClass = noteClasses[j];
-                ctx.beginPath();
-                ctx.fillStyle = `hsla(${hue}, 100%, 70%, ${freqs[j].magnitude})`;
-                ctx.arc(
-                    i * HISTORY_SCALE + 4 * HISTORY_SCALE, 
-                    canvas.height - ((noteClass + 0.5)%12) / 12 * canvas.height, 
-                    CIRCLE_RADIUS, 
-                    0, 
-                    2 * Math.PI
-                );
-                ctx.fill();
-            }
-        }
-        
-        for (let i = 0; i < notePositions.length; i++) {
-            ctx.fillStyle = "#D0D7DE";
-            ctx.fillText(
-                `${NOTE_NAMES[i]}${state.currentOctave}`, 
-                10, 
-                canvas.height - notePositions[i] + 7
-            );
-        }
-    }
+    });
+    state.fHistory = [];
 }
 
 // Initialize audio analyzer
@@ -385,14 +299,19 @@ async function initializeAudioAnalyzer() {
     };
 }
 
-// Get audio data from analyzer
 function getAudioData(analyzer) {
-    const timeData = new Uint8Array(FFT_SIZE);
-    analyzer.getByteTimeDomainData(timeData);
-    
-    const signal = Array.from(timeData);
-    
-    return signal;
+    const timeData = new Float32Array(FFT_SIZE);
+    analyzer.getFloatTimeDomainData(timeData);
+    return timeData;
+}
+
+function prepareComplexArray(realSamples) {
+    const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
+    for (let i = 0; i < FFT_SIZE; i++) {
+        complexArray[i*2] = realSamples[i]; // Real part
+        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
+    }
+    return complexArray;
 }
 
 // Initialize spectrum analyzer
@@ -404,6 +323,9 @@ async function initializeSpectrumAnalyzer() {
         
         // Set up canvas with OffscreenCanvas if supported
         const canvasInfo = setupCanvas("spectrumCanvas");
+        if (!canvasInfo) {
+            throw new Error('Failed to initialize canvas');
+        }
         
         // Hide mic button, show record button and set up recording
         document.getElementById("enable-mic-button").style.display = "none";
@@ -482,18 +404,33 @@ async function initializeSpectrumAnalyzer() {
         const historySize = calculateHistorySize(canvasInfo.canvas.width);
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
-        // Use setInterval for higher frame rates (potentially >60 FPS)
-        // Store the interval ID for potential cleanup
-        
+        let lastWarn = 0;
         let update = async function() {
+            const startTime = performance.now();
             const signal = getAudioData(analyser);
             await pitchTracker.updateState(signal);
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+            if (duration > updateIntervalMs * 1.5) {
+                const now = performance.now();
+                if (now - lastWarn > 2000) {
+                    lastWarn = now;
+                    console.warn('Pitch tracking is taking longer than expected:', duration, 'ms');
+                }
+            }
             setTimeout(update, updateIntervalMs);
         };
         update();
 
         let visualize = async function() {
+            const startTime = performance.now();
             renderVisualization(canvasInfo, historySize, pitchTracker.state);
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+
+            if (duration > visualizeIntervalMs) {
+                console.warn('Visualization is taking longer than expected:', duration, 'ms');
+            }
             setTimeout(visualize, visualizeIntervalMs);
         };
         visualize();
@@ -505,7 +442,6 @@ async function initializeSpectrumAnalyzer() {
         console.error(`you got an error: ${error}`);
     }
 }
-
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', async () => {
@@ -529,7 +465,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (enableTunerMicButton) {
             enableTunerMicButton.innerText = "Microphone access denied. Click to try again";
             enableTunerMicButton.style.backgroundColor = "#ff4444";
-            enableTunerMicButton.addEventListener("click", initializeTuner);
         }
+        console.error(`you got an error: ${error}`);
     }
 });

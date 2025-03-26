@@ -27,6 +27,7 @@
     "webpack-dev-server": "^5.2.0"
   },
   "dependencies": {
-    "webfft": "^1.0.3"
+    "webfft": "^1.0.3",
+    "yocto-queue": "^1.2.1"
   }
 }
