@@ -75,6 +75,21 @@ function drawDynamicElements(state) {
         if (state.fHistory[i] === null || state.fHistory[i].length == 0) continue;
         
         const freqs = state.fHistory[i];
+        // Add phase visualization if available
+        if (state.phaseConsistency && state.phaseConsistency[i]) {
+            const phaseDiffs = state.phaseConsistency[i];
+            for (let j = 0; j < phaseDiffs.length; j++) {
+                if (Math.abs(phaseDiffs[j]) > 0.1) {
+                    mainCtx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                    mainCtx.fillRect(
+                        mainCanvas.width - i,
+                        j * 2,
+                        1,
+                        1
+                    );
+                }
+            }
+        }
         const midiNotes = frequencyToMidiNotes(freqs);
         const noteClasses = getNoteClasses(midiNotes);
         const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));

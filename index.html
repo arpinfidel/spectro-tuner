@@ -102,6 +102,12 @@
                 <label for="spectral-whitening" style="margin-left: 5px; color: white;">Spectral Whitening</label>
                 <input type="checkbox" id="harmonic-filtering">
                 <label for="harmonic-filtering" style="margin-left: 5px; color: white;">Harmonic Filtering</label>
+                <input type="checkbox" id="phase-vocoder" checked>
+                <label for="phase-vocoder" style="margin-left: 5px; color: white;">Phase Vocoder</label>
+                <input type="checkbox" id="log-scaling" checked>
+                <label for="log-scaling" style="margin-left: 5px; color: white;">Log Scaling</label>
+                <input type="checkbox" id="enhanced-peaks" checked>
+                <label for="enhanced-peaks" style="margin-left: 5px; color: white;">Enhanced Peaks</label>
                 <select id="window-select" style="margin-left: 10px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
                     <option value="hanning" selected>Hanning Window</option>
                     <option value="gaussian">Gaussian Window</option>
@@ -126,6 +132,10 @@
                     <div style="display: flex; align-items: center; margin-bottom: 5px;">
                         <label for="max-magnitude-slider" style="width: 200px; color: white;">Default Max Magnitude: <span id="max-magnitude-value"></span></label>
                         <input type="range" id="max-magnitude-slider" min="0.0001" max="0.01" step="0.0001" style="flex-grow: 1;">
+                    </div>
+                    <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <label for="phase-tolerance-slider" style="width: 200px; color: white;">Phase Tolerance: <span id="phase-tolerance-value"></span></label>
+                        <input type="range" id="phase-tolerance-slider" min="0" max="1" step="0.01" style="flex-grow: 1;">
                     </div>
                 </div>
             </div>

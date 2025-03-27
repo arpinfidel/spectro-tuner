@@ -29,14 +29,18 @@ let currentWindow = 'hanning';
 // Default configuration for analysis
 let useParabolicInterpolation = true;
 let usePeakInterpolation = true;
+let usePhaseVocoder = true;
 let useSpectralWhitening = false;
 let useHarmonicFiltering = false;
+let useLogScaling = true;
+let useEnhancedPeakDetection = true;
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
 let th_2 = 0.0001; // Peak detection threshold
 let th_3 = 0.1; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
+let phaseStabilityThreshold = 0.1; // Phase vocoder stability threshold (lower is more strict)
 
 // Initialize WebFFT
 const fft = new webfft(FFT_SIZE);
@@ -72,13 +76,20 @@ async function detectPitch(spectrum, sampleRate) {
         magnitudes[i] = Math.sqrt(real*real + imag*imag);
     }
 
+    // Apply log scaling if enabled (transforms peaks to be more parabolic)
+    if (useLogScaling) {
+        const epsilon = 1e-10;
+        for (let i = 0; i < magnitudes.length; i++) {
+            magnitudes[i] = Math.log(magnitudes[i] + epsilon);
+        }
+    }
+
     // Apply spectral whitening if enabled
     if (useSpectralWhitening) {
         magnitudes = applySpectralWhitening(magnitudes);
     }
 
     let maxMagnitude = Math.max(...magnitudes);
-    // console.log("maxMagnitude", maxMagnitude)
     if (maxMagnitude < th_1) {
         return [];
     }
@@ -105,9 +116,22 @@ async function detectPitch(spectrum, sampleRate) {
 
         if (usePeakInterpolation) {
             findPeaks(2, frequencyBinCount - 2,
-                i =>
-                    magnitudes[i] > magnitudes[i-1]
-                    && magnitudes[i] > magnitudes[i+1]
+                i => {
+                    const isLocalMax = magnitudes[i] > magnitudes[i-1] 
+                                    && magnitudes[i] > magnitudes[i+1];
+                    
+                    if (!useEnhancedPeakDetection) {
+                        return isLocalMax;
+                    }
+                    
+                    // Enhanced peak detection checks wider neighborhood
+                    const isProminent = magnitudes[i] > 1.2 * Math.max(
+                        magnitudes[i-2], 
+                        magnitudes[i+2]
+                    );
+                    
+                    return isLocalMax && isProminent;
+                }
             );
         } else {
             findPeaks(1, frequencyBinCount, () => true);
@@ -131,36 +155,19 @@ async function detectPitch(spectrum, sampleRate) {
     if (useHarmonicFiltering) {
         freqs = filterHarmonics(freqs);
     }
-    // console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
     
-    // remove subharmonics
-    // freqs = freqs.filter(f => !isSubharmonic(f.frequency, freqs.map(f => f.frequency)));
-    // console.log("freqs2", freqs)
-
-    // maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
-    // console.log("maxMagnitude", maxMagnitude)
     const max2Magnitude = Math.max(defaultMaxMagnitude, freqs.length > 1 ? freqs[1].magnitude : 1);
     freqs = freqs.map(f => {
         f.magnitude = Math.min(1, f.magnitude / max2Magnitude);
         return f;
     })
-    // console.log("freqs2", JSON.parse(JSON.stringify(freqs)))
+    
     freqs = freqs.map(f => {
         f.magnitude = f.magnitude ** 2;
         return f;
     });
-    // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
-    freqs = freqs.filter(f => f.magnitude >= th_3)
-
-    // const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
-    // if (minMagnitude < 1) {
-    //     freqs = freqs.map(f => {
-    //         f.magnitude = (f.magnitude - minMagnitude) / (1 - minMagnitude);
-    //         // f.magnitude = f.magnitude * 0.8 + 0.2;
-    //         return f;
-    //     })
-    // }
     
+    freqs = freqs.filter(f => f.magnitude >= th_3)
     freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
     freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.slice(0, 30);
@@ -168,12 +175,18 @@ async function detectPitch(spectrum, sampleRate) {
     return freqs;
 }
 
+// Track phase between frames
+let lastPhases = null;
+const PHASE_HISTORY = 5; // Number of frames to track phase consistency
+
 // Create state manager for pitch tracking
 const createPitchTracker = (historySize, sampleRate) => {
     const state = {
         fHistory: [],
+        phaseHistory: [],
         currentOctave: 1,
-        currentFs: []
+        currentFs: [],
+        phaseStability: []
     };
 
     function getOctave(frequency) {
@@ -181,30 +194,77 @@ const createPitchTracker = (historySize, sampleRate) => {
         return Math.floor(Math.log2(frequency / C0));
     }
 
-    async function detectPitchAndOctave(signal) {
-        const complexSignal = prepareComplexArray(signal);
-        const spectrum = fft.fft(complexSignal);        
-        const frequencies = await detectPitch(spectrum, sampleRate, 0.07);
+    async function detectPitchAndOctave(signal, spectrum) {
+        // Phase analysis
+        const currentPhases = new Float32Array(FFT_SIZE/2);
+        for (let i = 0; i < FFT_SIZE/2; i++) {
+            currentPhases[i] = Math.atan2(spectrum[i*2 + 1], spectrum[i*2]);
+        }
+
+        // Calculate phase stability
+        const phaseStability = new Float32Array(FFT_SIZE/2).fill(1);
+        if (lastPhases && usePhaseVocoder) {
+            for (let i = 0; i < FFT_SIZE/2; i++) {
+                const phaseDiff = currentPhases[i] - lastPhases[i];
+                // Calculate expected phase change for this bin's frequency
+                const binFrequency = i * sampleRate / FFT_SIZE;
+                const expectedPhase = 2 * Math.PI * binFrequency * (updateIntervalMs/1000);
+                
+                // Calculate raw phase difference
+                let rawDiff = phaseDiff - expectedPhase;
+                
+                // Normalize to [-π, π] range with proper wrapping
+                rawDiff = ((rawDiff + Math.PI) % (2*Math.PI));
+                if (rawDiff < 0) rawDiff += 2*Math.PI; // Handle negative modulo
+                const normalizedDiff = rawDiff - Math.PI;
+                
+                // Calculate bounded phase error [0,1]
+                const phaseError = Math.min(1, Math.abs(normalizedDiff) / Math.PI);
+                
+                // Calculate stability [0,1] using squared error
+                phaseStability[i] = 1 - (phaseError * phaseError);
+            }
+        }
+        lastPhases = currentPhases;
+
+        let frequencies = await detectPitch(spectrum, sampleRate, 0.07);
+        if (usePhaseVocoder && frequencies.length > 0) {
+            frequencies = frequencies.map(freq => {
+                const bin = Math.round(freq.frequency * FFT_SIZE / sampleRate);
+                if (bin >= 0 && bin < phaseStability.length) {
+                    console.log(phaseStability[bin], phaseStabilityThreshold);
+                    if (phaseStability[bin] >= phaseStabilityThreshold) {
+                        return freq;
+                    // } else if (phaseStability[bin] < phaseStabilityThreshold * 0.8) {
+                    } else {
+                        const instability = (phaseStabilityThreshold - phaseStability[bin]) / phaseStabilityThreshold;
+                        // freq.magnitude *= (1 - (instability*0.5));
+                        freq.magnitude *= phaseStability[bin];
+                    }
+                }
+                return freq;
+            });
+        }
         
         if (frequencies.length == 0) {
             return [state.currentOctave, []];
         }
         
-        // TODO: do for each note
         let octave = getOctave(frequencies[0].frequency);
-        
         return [octave, frequencies];
     }
 
     async function updateState(signal) {
-        const [octave, frequencies] = await detectPitchAndOctave(signal);
+        const complexSignal = prepareComplexArray(signal);
+        const spectrum = fft.fft(complexSignal);
+        const [octave, frequencies] = await detectPitchAndOctave(signal, spectrum);
+        
         if (state.fHistory.length >= historySize) {
             state.fHistory.shift();
         }
         if (frequencies.length > 0) {
             state.fHistory.push(frequencies);
             state.currentFs = frequencies;
-            
             state.currentOctave = Math.round(octave) || state.currentOctave;
         } else {
             state.fHistory.push(null);
@@ -412,7 +472,7 @@ async function initializeSpectrumAnalyzer() {
         interpolationToggle.classList.remove("hidden");
         interpolationToggle.style.display = "flex";
         
-        // Add event listener for interpolation toggle
+        // Add event listeners for processing toggles
         document.getElementById("enable-interpolation").addEventListener("change", function(e) {
             useParabolicInterpolation = e.target.checked;
         });
@@ -424,6 +484,15 @@ async function initializeSpectrumAnalyzer() {
         });
         document.getElementById("harmonic-filtering").addEventListener("change", function(e) {
             useHarmonicFiltering = e.target.checked;
+        });
+        document.getElementById("phase-vocoder").addEventListener("change", function(e) {
+            usePhaseVocoder = e.target.checked;
+        });
+        document.getElementById("log-scaling").addEventListener("change", function(e) {
+            useLogScaling = e.target.checked;
+        });
+        document.getElementById("enhanced-peaks").addEventListener("change", function(e) {
+            useEnhancedPeakDetection = e.target.checked;
         });
         // Window function dropdown
         const windowSelect = document.getElementById("window-select");
@@ -469,6 +538,15 @@ async function initializeSpectrumAnalyzer() {
         maxMagnitudeSlider.addEventListener("input", function(e) {
             defaultMaxMagnitude = parseFloat(e.target.value);
             document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
+        });
+
+        // Phase tolerance slider
+        const phaseToleranceSlider = document.getElementById("phase-tolerance-slider");
+        phaseToleranceSlider.value = phaseStabilityThreshold;
+        document.getElementById("phase-tolerance-value").textContent = phaseStabilityThreshold.toFixed(2);
+        phaseToleranceSlider.addEventListener("input", function(e) {
+            phaseStabilityThreshold = parseFloat(e.target.value);
+            document.getElementById("phase-tolerance-value").textContent = phaseStabilityThreshold.toFixed(2);
         });
         
         // setupRecording(canvas, audioStream);
