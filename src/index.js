@@ -8,22 +8,23 @@ import {
     flatTopWindow,
     applyWindow,
 } from './window_functions.js';
-import Queue from 'yocto-queue';
 import webfft from 'webfft';
 
 // Constants for audio processing
-const FFT_SIZE = 4096*16;
+const ACTUAL_FFT_SIZE = 4096*16;
+const FFT_SIZE = ACTUAL_FFT_SIZE; // Zero-padded size 
 const HISTORY_SCALE = 1;
 const updateIntervalMs = 1000/300;
 const visualizeIntervalMs = 1000/60;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
-// Initialize all window functions
+// Initialize all window functions (using actual FFT size)
 const windows = {
-    'hanning': hanningWindow(FFT_SIZE),
-    'gaussian': gaussianWindow(FFT_SIZE),
-    'blackman-harris': blackmanHarrisWindow(FFT_SIZE),
-    'hamming': hammingWindow(FFT_SIZE),
-    'flat-top': flatTopWindow(FFT_SIZE)
+    'none': new Float32Array(ACTUAL_FFT_SIZE).fill(1),
+    'hanning': hanningWindow(ACTUAL_FFT_SIZE),
+    'gaussian': gaussianWindow(ACTUAL_FFT_SIZE),
+    'blackman-harris': blackmanHarrisWindow(ACTUAL_FFT_SIZE),
+    'hamming': hammingWindow(ACTUAL_FFT_SIZE),
+    'flat-top': flatTopWindow(ACTUAL_FFT_SIZE)
 };
 let currentWindow = 'hanning';
 
@@ -39,7 +40,7 @@ let th_2 = 0.01; // Peak detection threshold
 let th_3 = 0.1; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
-// Initialize WebFFT
+// Initialize WebFFT with the zero-padded size
 const fft = new webfft(FFT_SIZE);
 fft.profile(); // Profile to find fastest implementation
 
@@ -62,24 +63,99 @@ function detectBrowser() {
            userAgent.includes("Edge") ? 3 : 1;
 }
 
-// Pitch detection using FFT spectrum
-async function detectPitch(spectrum, sampleRate) {
-    // Convert interleaved complex FFT output to magnitudes
+function applyReassignment(spectrum, sampleRate) {
     const frequencyBinCount = FFT_SIZE / 2;
     let magnitudes = new Float32Array(frequencyBinCount);
+    let frequencies = new Float32Array(frequencyBinCount);
+    
+    // Calculate standard magnitudes first
     for (let i = 0; i < frequencyBinCount; i++) {
         const real = spectrum[i*2];
         const imag = spectrum[i*2 + 1];
         magnitudes[i] = Math.sqrt(real*real + imag*imag);
+        frequencies[i] = i * sampleRate / FFT_SIZE;
+    }
+    
+    // Calculate phase derivative (approximation)
+    const reassignedMagnitudes = new Float32Array(frequencyBinCount).fill(0);
+    
+    // Find the maximum magnitude to use as a reference
+    const maxMag = Math.max(...magnitudes);
+    const threshold = maxMag * 0.1; // Only reassign bins with magnitude below 10% of max
+    
+    for (let i = 1; i < frequencyBinCount - 1; i++) {
+        // Skip bins with very low magnitude
+        if (magnitudes[i] < th_1) continue;
+        
+        // Preserve strong peaks (likely fundamentals) by not reassigning them
+        if (magnitudes[i] > threshold) {
+            reassignedMagnitudes[i] += magnitudes[i];
+            continue;
+        }
+        
+        // Simple phase derivative approximation
+        const prevPhase = Math.atan2(spectrum[(i-1)*2+1], spectrum[(i-1)*2]);
+        const currPhase = Math.atan2(spectrum[i*2+1], spectrum[i*2]);
+        const nextPhase = Math.atan2(spectrum[(i+1)*2+1], spectrum[(i+1)*2]);
+        
+        // Unwrap phases
+        let phaseDiff1 = currPhase - prevPhase;
+        phaseDiff1 = phaseDiff1 > Math.PI ? phaseDiff1 - 2*Math.PI : (phaseDiff1 < -Math.PI ? phaseDiff1 + 2*Math.PI : phaseDiff1);
+        
+        let phaseDiff2 = nextPhase - currPhase;
+        phaseDiff2 = phaseDiff2 > Math.PI ? phaseDiff2 - 2*Math.PI : (phaseDiff2 < -Math.PI ? phaseDiff2 + 2*Math.PI : phaseDiff2);
+        
+        // Calculate frequency correction
+        const freqCorrection = (phaseDiff2 - phaseDiff1) / (2 * Math.PI) * sampleRate / FFT_SIZE;
+        const reassignedFreqBin = Math.round(i + freqCorrection * FFT_SIZE / sampleRate);
+        
+        // Ensure we're within bounds
+        if (reassignedFreqBin >= 0 && reassignedFreqBin < frequencyBinCount) {
+            reassignedMagnitudes[reassignedFreqBin] += magnitudes[i];
+        }
+    }
+    
+    // Blend original and reassigned magnitudes to preserve fundamentals
+    for (let i = 0; i < frequencyBinCount; i++) {
+        if (reassignedMagnitudes[i] < magnitudes[i]) {
+            reassignedMagnitudes[i] = magnitudes[i];
+        }
+    }
+    
+    return { magnitudes: reassignedMagnitudes, frequencies };
+}
+
+let useReassignment = true; // Toggle for reassignment method
+
+// Pitch detection using FFT spectrum
+async function detectPitch(spectrum, sampleRate) {
+    // Convert interleaved complex FFT output to magnitudes
+    const frequencyBinCount = FFT_SIZE / 2;
+    let magnitudes, frequencies;
+    
+    if (useReassignment) {
+        // Use reassignment method
+        const result = applyReassignment(spectrum, sampleRate);
+        magnitudes = result.magnitudes;
+        frequencies = result.frequencies;
+    } else {
+        // Use traditional method
+        magnitudes = new Float32Array(frequencyBinCount);
+        frequencies = new Float32Array(frequencyBinCount);
+        for (let i = 0; i < frequencyBinCount; i++) {
+            const real = spectrum[i*2];
+            const imag = spectrum[i*2 + 1];
+            magnitudes[i] = Math.sqrt(real*real + imag*imag);
+            frequencies[i] = i * sampleRate / FFT_SIZE;
+        }
     }
 
     // Apply spectral whitening if enabled
     if (useSpectralWhitening) {
-        magnitudes = applySpectralWhitening(magnitudes);
+        applySpectralWhitening(magnitudes);
     }
 
     let maxMagnitude = Math.max(...magnitudes);
-    // console.log("maxMagnitude", maxMagnitude)
     if (maxMagnitude < th_1) {
         return [];
     }
@@ -92,7 +168,9 @@ async function detectPitch(spectrum, sampleRate) {
                 if (!conditionFn(i) || magnitudes[i] < th_2) {
                     continue;
                 }
-                let peak = peakFn(i)
+                // Use the reassigned frequencies instead of calculating from bin index
+                let peak = peakFn(i);
+                peak.frequency = frequencies[i]; // Use reassigned frequency
                 
                 if (peak.frequency < 20
                     || peak.frequency > 22000
@@ -164,7 +242,7 @@ async function detectPitch(spectrum, sampleRate) {
     if (useHarmonicFiltering) {
         freqs = filterHarmonics(freqs);
     }
-    // console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
+    console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
     
     // remove subharmonics
     // freqs = freqs.filter(f => !isSubharmonic(f.frequency, freqs.map(f => f.frequency)));
@@ -365,12 +443,11 @@ async function initializeAudioAnalyzer() {
 }
 
 function getAudioData(analyzer) {
-    const timeData = new Float32Array(FFT_SIZE);
+    const timeData = new Float32Array(ACTUAL_FFT_SIZE);
     analyzer.getFloatTimeDomainData(timeData);
     
-    // Apply selected window function
+    // Apply selected window function to the actual FFT size
     return applyWindow(timeData, windows[currentWindow]);
-    
 }
 
 // Apply spectral whitening to magnitudes
@@ -414,13 +491,22 @@ function filterHarmonics(frequencies, tolerance = 0.05) {
 }
 
 
-// Convert to interleaved complex format
+// Convert to interleaved complex format with zero-padding
 function prepareComplexArray(realSamples) {
     const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
-    for (let i = 0; i < FFT_SIZE; i++) {
+    
+    // Copy actual samples (up to ACTUAL_FFT_SIZE)
+    for (let i = 0; i < ACTUAL_FFT_SIZE; i++) {
         complexArray[i*2] = realSamples[i]; // Real part
         complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
     }
+    
+    // Zero-pad the rest (from ACTUAL_FFT_SIZE to FFT_SIZE)
+    for (let i = ACTUAL_FFT_SIZE; i < FFT_SIZE; i++) {
+        complexArray[i*2] = 0;     // Zero-pad real part
+        complexArray[i*2 + 1] = 0; // Zero-pad imaginary part
+    }
+    
     return complexArray;
 }
 
