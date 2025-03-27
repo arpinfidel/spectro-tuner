@@ -1,5 +1,13 @@
-import { findInterpolatedPeak } from './parabolic_interpolation.js';
-import { gaussianWindow, hanningWindow, applyWindow } from './window_functions.js';
+import { findInterpolatedPeak, findInterpolatedPeakQuinn } from './parabolic_interpolation.js';
+import { findInterpolatedPeakQuinnComplex, findInterpolatedPeakJacobsen } from './enhanced_interpolation.js';
+import { 
+    gaussianWindow, 
+    hanningWindow, 
+    blackmanHarrisWindow, 
+    hammingWindow,
+    flatTopWindow,
+    applyWindow,
+} from './window_functions.js';
 import Queue from 'yocto-queue';
 import webfft from 'webfft';
 
@@ -9,18 +17,25 @@ const HISTORY_SCALE = 1;
 const updateIntervalMs = 1000/300;
 const visualizeIntervalMs = 1000/60;
 const calculateHistorySize = width => Math.round(width / HISTORY_SCALE);
-const gWindow = gaussianWindow(FFT_SIZE);
-const hWindow = hanningWindow(FFT_SIZE);
+// Initialize all window functions
+const windows = {
+    'hanning': hanningWindow(FFT_SIZE),
+    'gaussian': gaussianWindow(FFT_SIZE),
+    'blackman-harris': blackmanHarrisWindow(FFT_SIZE),
+    'hamming': hammingWindow(FFT_SIZE),
+    'flat-top': flatTopWindow(FFT_SIZE)
+};
+let currentWindow = 'hanning';
 
-// Default configuration for parabolic interpolation
-let useParabolicInterpolation = true;
-let usePeakInterpolation = true;
-let useGaussianWindow = false;
-let useHanningWindow = true;
+// Default configuration for analysis
+let interpolationMethod = "parabolic"; // Changed from useParabolicInterpolation boolean to a string
+let useSpectralWhitening = false;
+let useHarmonicFiltering = false;
+let useComplexData = false; // Whether to use complex FFT data for interpolation
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
-let th_2 = 0.0001; // Peak detection threshold
+let th_2 = 0.01; // Peak detection threshold
 let th_3 = 0.1; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
@@ -51,11 +66,16 @@ function detectBrowser() {
 async function detectPitch(spectrum, sampleRate) {
     // Convert interleaved complex FFT output to magnitudes
     const frequencyBinCount = FFT_SIZE / 2;
-    const magnitudes = new Float32Array(frequencyBinCount);
+    let magnitudes = new Float32Array(frequencyBinCount);
     for (let i = 0; i < frequencyBinCount; i++) {
         const real = spectrum[i*2];
         const imag = spectrum[i*2 + 1];
         magnitudes[i] = Math.sqrt(real*real + imag*imag);
+    }
+
+    // Apply spectral whitening if enabled
+    if (useSpectralWhitening) {
+        magnitudes = applySpectralWhitening(magnitudes);
     }
 
     let maxMagnitude = Math.max(...magnitudes);
@@ -66,13 +86,14 @@ async function detectPitch(spectrum, sampleRate) {
 
     // Find peaks in the frequency domain
     let freqs = [];
-    if (useParabolicInterpolation) {
-        const findPeaks = (start, end, conditionFn) => {
+    if (interpolationMethod !== "none") {
+        const findPeaks = (start, end, conditionFn, peakFn) => {
             for (let i = start; i < end; i++) {
                 if (!conditionFn(i) || magnitudes[i] < th_2) {
                     continue;
                 }
-                const peak = findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE);
+                let peak = peakFn(i)
+                
                 if (peak.frequency < 20
                     || peak.frequency > 22000
                     || isNaN(peak.frequency)
@@ -84,14 +105,45 @@ async function detectPitch(spectrum, sampleRate) {
             }
         };
 
-        if (usePeakInterpolation) {
-            findPeaks(2, frequencyBinCount - 2,
-                i =>
-                    magnitudes[i] > magnitudes[i-1]
-                    && magnitudes[i] > magnitudes[i+1]
-            );
-        } else {
-            findPeaks(1, frequencyBinCount, () => true);
+        switch (interpolationMethod) {
+            case "parabolic":
+                findPeaks(2, frequencyBinCount - 2,
+                    i =>
+                        magnitudes[i] > magnitudes[i-1]
+                        && magnitudes[i] > magnitudes[i+1],
+                    i => findInterpolatedPeak(magnitudes, i, sampleRate, FFT_SIZE),
+                );
+                break;
+            case "quinn":
+                findPeaks(3, frequencyBinCount - 2,
+                    i =>
+                        magnitudes[i] > magnitudes[i-1]
+                        && magnitudes[i] > magnitudes[i+1]
+                        && magnitudes[i] > magnitudes[i-2]
+                        && magnitudes[i] > magnitudes[i+2],
+                    i => findInterpolatedPeakQuinn(magnitudes, i, sampleRate, FFT_SIZE),
+                );
+                break;
+            case "quinn-complex":
+                findPeaks(3, frequencyBinCount - 2,
+                    i =>
+                        magnitudes[i] > magnitudes[i-1]
+                        && magnitudes[i] > magnitudes[i+1]
+                        && magnitudes[i] > magnitudes[i-2]
+                        && magnitudes[i] > magnitudes[i+2],
+                    i => findInterpolatedPeakQuinnComplex(spectrum, i, sampleRate, FFT_SIZE),
+                );
+                break;
+            case "jacobsen":
+                findPeaks(3, frequencyBinCount - 2,
+                    i =>
+                        magnitudes[i] > magnitudes[i-1]
+                        && magnitudes[i] > magnitudes[i+1]
+                        && magnitudes[i] > magnitudes[i-2]
+                        && magnitudes[i] > magnitudes[i+2],
+                    i => findInterpolatedPeakJacobsen(spectrum, i, sampleRate, FFT_SIZE),
+                );
+                break;
         }
     } else {
         for (let i = 1; i < frequencyBinCount; i++) {
@@ -108,6 +160,10 @@ async function detectPitch(spectrum, sampleRate) {
     
     freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.slice(0, 100);
+
+    if (useHarmonicFiltering) {
+        freqs = filterHarmonics(freqs);
+    }
     // console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
     
     // remove subharmonics
@@ -313,15 +369,50 @@ function getAudioData(analyzer) {
     analyzer.getFloatTimeDomainData(timeData);
     
     // Apply selected window function
-    if (useGaussianWindow) {
-        return applyWindow(timeData, gWindow);
-    } else if (useHanningWindow) {
-        return applyWindow(timeData, hWindow);
-    }
+    return applyWindow(timeData, windows[currentWindow]);
     
-    // Default to no window if none selected
-    return timeData;
 }
+
+// Apply spectral whitening to magnitudes
+function applySpectralWhitening(magnitudes) {
+    // Calculate mean magnitude
+    const mean = magnitudes.reduce((sum, val) => sum + val, 0) / magnitudes.length;
+    
+    // Whitening factor to prevent division by zero
+    const epsilon = 1e-10;
+    
+    // Apply whitening
+    for (let i = 0; i < magnitudes.length; i++) {
+        magnitudes[i] = magnitudes[i] / (mean + epsilon);
+    }
+    return magnitudes;
+}
+
+function filterHarmonics(frequencies, tolerance = 0.05) {
+    if (frequencies.length === 0) return [];
+    
+    // Sort by magnitude
+    frequencies.sort((a, b) => b.magnitude - a.magnitude);
+    
+    // Consider the first three strongest peaks as potential fundamentals
+    const potentialFundamentals = frequencies.slice(0, 3).map(peak => peak.frequency);
+    
+    // Filter out frequencies that are likely harmonics
+    return frequencies.map(peak => {
+        for (const potentialFundamental of potentialFundamentals) {
+            for (let harmonic = 2; harmonic <= 10; harmonic++) {
+                const harmonicFreq = potentialFundamental * harmonic;
+                const relativeError = Math.abs(peak.frequency - harmonicFreq) / harmonicFreq;
+                
+                if (relativeError < tolerance) {
+                    peak.magnitude *= 0.7; // This is likely a harmonic
+                }
+            }
+        }
+        return peak;
+    });
+}
+
 
 // Convert to interleaved complex format
 function prepareComplexArray(realSamples) {
@@ -335,11 +426,6 @@ function prepareComplexArray(realSamples) {
 
 // Initialize spectrum analyzer
 async function initializeSpectrumAnalyzer() {
-    // Ensure at least one window function is selected
-    if (!useGaussianWindow && !useHanningWindow) {
-        useGaussianWindow = true;
-        document.getElementById("gaussian-window").checked = true;
-    }
     try {
         // Initialize audio
         const {analyser, sampleRate} = await initializeAudioAnalyzer();
@@ -359,27 +445,21 @@ async function initializeSpectrumAnalyzer() {
         interpolationToggle.classList.remove("hidden");
         interpolationToggle.style.display = "flex";
         
-        // Add event listener for interpolation toggle
-        document.getElementById("enable-interpolation").addEventListener("change", function(e) {
-            useParabolicInterpolation = e.target.checked;
-        });
-        document.getElementById("peak-interpolation").addEventListener("change", function(e) {
-            usePeakInterpolation = e.target.checked;
-        });
-        document.getElementById("gaussian-window").addEventListener("change", function(e) {
-            useGaussianWindow = e.target.checked;
-            if (useGaussianWindow && document.getElementById("hanning-window").checked) {
-                document.getElementById("hanning-window").checked = false;
-                useHanningWindow = false;
-            }
+        // Add event listener for interpolation dropdown
+        document.getElementById("interpolation-select").addEventListener("change", function(e) {
+            interpolationMethod = e.target.value;
         });
         
-        document.getElementById("hanning-window").addEventListener("change", function(e) {
-            useHanningWindow = e.target.checked;
-            if (useHanningWindow && document.getElementById("gaussian-window").checked) {
-                document.getElementById("gaussian-window").checked = false;
-                useGaussianWindow = false;
-            }
+        document.getElementById("spectral-whitening").addEventListener("change", function(e) {
+            useSpectralWhitening = e.target.checked;
+        });
+        document.getElementById("harmonic-filtering").addEventListener("change", function(e) {
+            useHarmonicFiltering = e.target.checked;
+        });
+        // Window function dropdown
+        const windowSelect = document.getElementById("window-select");
+        windowSelect.addEventListener("change", function(e) {
+            currentWindow = e.target.value;
         });
         
         // Add event listeners for threshold sliders

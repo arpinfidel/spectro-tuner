@@ -94,14 +94,24 @@
         <div class="button-container" style="margin-bottom: 20px;">
             <button id="enable-mic-button">Enable Microphone</button>
             <div id="interpolation-toggle" class="hidden" style="margin-left: 20px; display: flex; align-items: center; flex-wrap: wrap">
-                <input type="checkbox" id="enable-interpolation" checked>
-                <label for="enable-interpolation" style="margin-left: 5px; color: white;">Enable Parabolic Interpolation</label>
-                <input type="checkbox" id="peak-interpolation" checked>
-                <label for="peak-interpolation" style="margin-left: 5px; color: white;">Peak Interpolation</label>
-                <input type="checkbox" id="gaussian-window" checked>
-                <label for="gaussian-window" style="margin-left: 5px; color: white;">Use Gaussian Window</label>
-                <input type="checkbox" id="hanning-window">
-                <label for="hanning-window" style="margin-left: 5px; color: white;">Use Hanning Window</label>
+                <select id="interpolation-select" style="margin-right: 10px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
+                    <option value="none">None</option>
+                    <option value="parabolic" selected>Parabolic</option>
+                    <option value="quinn">Quinn's</option>
+                    <option value="quinn-complex">Quinn's Complex</option>
+                    <option value="jacobsen">Jacobsen</option>
+                </select>
+                <input type="checkbox" id="spectral-whitening">
+                <label for="spectral-whitening" style="margin-left: 5px; color: white;">Spectral Whitening</label>
+                <input type="checkbox" id="harmonic-filtering">
+                <label for="harmonic-filtering" style="margin-left: 5px; color: white;">Harmonic Filtering</label>
+                <select id="window-select" style="margin-left: 10px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
+                    <option value="hanning" selected>Hanning Window</option>
+                    <option value="gaussian">Gaussian Window</option>
+                    <option value="blackman-harris">Blackman-Harris Window</option>
+                    <option value="hamming">Hamming Window</option>
+                    <option value="flat-top">Flat-Top Window</option>
+                </select>
                 
                 <div style="width: 100%; margin-top: 10px;">
                     <div style="display: flex; align-items: center; margin-bottom: 5px;">

@@ -59,6 +59,39 @@ function findInterpolatedPeak(magnitudes, peakIndex, sampleRate, fftSize) {
         magnitude: y
     };
 }
+/**
+ * Finds the interpolated peak in frequency domain using Quinn's Second Estimator
+ * @param {Float32Array} magnitudes - Array of magnitude values
+ * @param {number} peakIndex - Index of the detected peak in the magnitudes array
+ * @param {number} sampleRate - Sample rate of the audio
+ * @param {number} fftSize - Size of the FFT
+ * @returns {Object} Object containing the interpolated frequency and magnitude
+ */
+function findInterpolatedPeakQuinn(magnitudes, peakIndex, sampleRate, fftSize) {
+    // Quinn's Second Estimator - more accurate than parabolic for sinusoids
+    // Requires at least 2 points on each side of the peak
+    if (peakIndex < 2 || peakIndex >= magnitudes.length - 2) {
+        return {
+            frequency: peakIndex * sampleRate / fftSize,
+            magnitude: magnitudes[peakIndex]
+        };
+    }
+    
+    const alpha = Math.log(magnitudes[peakIndex+1] / magnitudes[peakIndex-1]) / 2;
+    const beta = Math.log(magnitudes[peakIndex+2] / magnitudes[peakIndex-2]) / 4;
+    const gamma = alpha / (alpha - beta);
+    
+    // Refined bin location
+    const refinedBin = peakIndex + gamma;
+    
+    // Calculate frequency and magnitude
+    const frequency = refinedBin * sampleRate / fftSize;
+    
+    // Interpolate magnitude
+    const magnitude = magnitudes[peakIndex] * Math.exp(-(alpha * gamma * gamma) / 2);
+    
+    return { frequency, magnitude };
+}
 
 /**
  * Track frequency changes to better handle vibrato and rapid pitch changes
@@ -94,4 +127,4 @@ function trackFrequencyChanges(currentPeaks, previousPeaks, maxDeltaHz = 40) {
     return trackedPeaks;
 }
 
-export { qint, findInterpolatedPeak, trackFrequencyChanges };
+export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, trackFrequencyChanges };
