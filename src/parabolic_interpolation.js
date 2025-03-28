@@ -127,4 +127,64 @@ function trackFrequencyChanges(currentPeaks, previousPeaks, maxDeltaHz = 40) {
     return trackedPeaks;
 }
 
-export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, trackFrequencyChanges };
+class KalmanFilter {
+    constructor(processNoise = 1.0, measurementNoise = 1.0, initialState = 0, initialUncertainty = 1.0) {
+        this.processNoise = processNoise;
+        this.measurementNoise = measurementNoise;
+        this.state = initialState;
+        this.uncertainty = initialUncertainty;
+    }
+
+    update(measurement) {
+        // Prediction
+        const predictedUncertainty = this.uncertainty + this.processNoise;
+        
+        // Update
+        const kalmanGain = predictedUncertainty / (predictedUncertainty + this.measurementNoise);
+        this.state = this.state + kalmanGain * (measurement - this.state);
+        this.uncertainty = (1 - kalmanGain) * predictedUncertainty;
+        
+        return this.state;
+    }
+}
+
+/**
+ * Track frequency changes using Kalman filtering
+ * @param {Array} currentPeaks - Current detected peaks
+ * @param {Array} previousPeaks - Previously detected peaks
+ * @param {number} maxDeltaHz - Maximum allowed frequency change in Hz
+ * @param {Object} kalmanFilters - Dictionary of Kalman filters by peak index
+ * @returns {Object} Object containing tracked peaks and updated Kalman filters
+ */
+function trackFrequencyChangesKalman(currentPeaks, previousPeaks, maxDeltaHz = 40, kalmanFilters = {}) {
+    if (!previousPeaks || previousPeaks.length === 0) {
+        // Initialize Kalman filters for each peak
+        currentPeaks.forEach((peak, i) => {
+            kalmanFilters[i] = new KalmanFilter(0.1, 1.0, peak.frequency);
+        });
+        return { peaks: currentPeaks, kalmanFilters };
+    }
+    
+    // Create a copy of current peaks to modify
+    const trackedPeaks = [...currentPeaks];
+    
+    // For each previous peak, find the closest current peak
+    previousPeaks.forEach((prevPeak, i) => {
+        // Find the closest current peak within maxDeltaHz
+        const closestPeakIndex = trackedPeaks.findIndex(peak => 
+            Math.abs(peak.frequency - prevPeak.frequency) < maxDeltaHz);
+        
+        if (closestPeakIndex >= 0) {
+            // Update Kalman filter with new measurement
+            if (!kalmanFilters[i]) {
+                kalmanFilters[i] = new KalmanFilter(0.1, 1.0, prevPeak.frequency);
+            }
+            trackedPeaks[closestPeakIndex].frequency = 
+                kalmanFilters[i].update(trackedPeaks[closestPeakIndex].frequency);
+        }
+    });
+    
+    return { peaks: trackedPeaks, kalmanFilters };
+}
+
+export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, trackFrequencyChanges, trackFrequencyChangesKalman };

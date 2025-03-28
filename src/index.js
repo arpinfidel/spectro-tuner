@@ -1,4 +1,8 @@
-import { findInterpolatedPeak, findInterpolatedPeakQuinn } from './parabolic_interpolation.js';
+import { 
+    findInterpolatedPeak, 
+    findInterpolatedPeakQuinn,
+    trackFrequencyChangesKalman 
+} from './parabolic_interpolation.js';
 import { findInterpolatedPeakQuinnComplex, findInterpolatedPeakJacobsen } from './enhanced_interpolation.js';
 import { 
     gaussianWindow, 
@@ -33,6 +37,7 @@ let currentWindow = 'hanning';
 let interpolationMethod = "parabolic"; // Changed from useParabolicInterpolation boolean to a string
 let useSpectralWhitening = false;
 let useHarmonicFiltering = false;
+let useKalmanFilters = false;
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
@@ -48,9 +53,9 @@ fft.profile(); // Profile to find fastest implementation
 async function preventScreenSleep() {
     try {
         await navigator.wakeLock.request("screen");
-        console.log("Wake lock acquired.");
+        // console.log("Wake lock acquired.");
     } catch (error) {
-        console.log(`Warning: did not acquire wake lock: ${error.name}, ${error.message}`);
+        // console.log(`Warning: did not acquire wake lock: ${error.name}, ${error.message}`);
     }
 }
 
@@ -235,6 +240,7 @@ const createPitchTracker = (historySize, sampleRate) => {
         currentFs: [],
         currentRawFs: [],
     };
+    let kalmanFilters = {};
 
     async function detectPitchAndOctave(signal) {
         const complexSignal = prepareComplexArray(signal);
@@ -257,6 +263,18 @@ const createPitchTracker = (historySize, sampleRate) => {
             state.fHistory.shift();
         }
         if (frequencies.length > 0) {
+            if (useKalmanFilters) {
+                // Apply Kalman filtering to frequencies
+                const { peaks, kalmanFilters: updatedFilters } = trackFrequencyChangesKalman(
+                    frequencies,
+                    state.currentFs,
+                    40,
+                    kalmanFilters
+                );
+                
+                kalmanFilters = updatedFilters;
+                frequencies = peaks;
+            }
             state.fHistory.push(frequencies);
             state.currentFs = frequencies;
             state.currentRawFs = rawfreqs;
@@ -379,7 +397,7 @@ async function initializeAudioAnalyzer() {
     const gainNode = audioContext.createGain();
     
     gainNode.gain.value = detectBrowser();
-    console.log(analyzer, gainNode.gain.value);
+    // console.log(analyzer, gainNode.gain.value);
     
     source.connect(gainNode).connect(analyzer);
     
@@ -679,7 +697,7 @@ function updateTunerDisplay(tunerDisplay, tunerDisplayText, state) {
     if (!octave || octave < 0) {
         invalid = true;
     }
-    console.log(octave, tunerFreq, cents);
+    // console.log(octave, tunerFreq, cents);
 
     if (invalid) {
         style = `--value: 50; --content: '-'; --primary: #777777; --secondary: #555555`
