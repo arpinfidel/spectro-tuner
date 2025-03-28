@@ -135,7 +135,6 @@ function renderFFTDetail(state) {
 
     const dotSize = 2;
 
-
     for (let i = 1; i < freqs.length - 1; i++) {
         const logFreq = Math.log2(freqs[i].frequency);
         const x = (logFreq - logMinFreq) / logFreqRange * fftDetailCanvas.width;

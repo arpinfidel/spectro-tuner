@@ -63,6 +63,26 @@ function detectBrowser() {
            userAgent.includes("Edge") ? 3 : 1;
 }
 
+function getOctave(frequency) {
+    const C0 = 16.3515978313;
+    const octave = Math.floor(Math.log2(frequency / C0));
+    return octave;
+}
+
+// Convert to interleaved complex format
+function prepareComplexArray(realSamples) {
+    const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
+    for (let i = 0; i < FFT_SIZE; i++) {
+        complexArray[i*2] = realSamples[i]; // Real part
+        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
+    }
+    for (let i = FFT_SIZE; i < FFT_SIZE * 2; i++) {
+        complexArray[i*2] = 0; // Real part
+        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
+    }
+    return complexArray;
+}
+
 // Pitch detection using FFT spectrum
 async function detectPitch(spectrum, sampleRate) {
     // Convert interleaved complex FFT output to magnitudes
@@ -189,7 +209,7 @@ async function detectPitch(spectrum, sampleRate) {
         return f;
     });
     // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
-    freqs = freqs.filter(f => f.magnitude >= th_3)
+    freqs = freqs.filter(f => f.frequency >= 30 && f.magnitude >= th_3)
 
     // const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
     // if (minMagnitude < 1) {
@@ -215,11 +235,6 @@ const createPitchTracker = (historySize, sampleRate) => {
         currentFs: [],
         currentRawFs: [],
     };
-
-    function getOctave(frequency) {
-        const C0 = 16.3515978313;
-        return Math.floor(Math.log2(frequency / C0));
-    }
 
     async function detectPitchAndOctave(signal) {
         const complexSignal = prepareComplexArray(signal);
@@ -432,20 +447,6 @@ function filterHarmonics(frequencies, tolerance = 0.05) {
 }
 
 
-// Convert to interleaved complex format
-function prepareComplexArray(realSamples) {
-    const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
-    for (let i = 0; i < FFT_SIZE; i++) {
-        complexArray[i*2] = realSamples[i]; // Real part
-        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
-    }
-    for (let i = FFT_SIZE; i < FFT_SIZE * 2; i++) {
-        complexArray[i*2] = 0; // Real part
-        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
-    }
-    return complexArray;
-}
-
 // Initialize spectrum analyzer
 async function initializeSpectrumAnalyzer() {
     try {
@@ -490,6 +491,20 @@ async function initializeSpectrumAnalyzer() {
             currentWindow = e.target.value;
         });
         
+        // Add FFT details toggle
+        let showFFTDetails = true;
+        const fftDetailsToggle = document.getElementById("fft-details-toggle");
+        const fftDetailsContainer = document.querySelector("#fftDetailCanvas").parentElement;
+        
+        const toggleFFTDetails = () => {
+            showFFTDetails = !showFFTDetails;
+            fftDetailsContainer.style.display = showFFTDetails ? "block" : "none";
+            fftDetailsToggle.textContent = showFFTDetails ? "Hide FFT Details" : "Show FFT Details";
+        }
+
+        fftDetailsToggle.addEventListener("click", toggleFFTDetails);
+        toggleFFTDetails(); // immediately hide. can't default to hidden in html because can't resize canvas after transfer
+
         // Add event listeners for threshold sliders
         const th1Slider = document.getElementById("th-1-slider");
         const th2Slider = document.getElementById("th-2-slider");
@@ -537,12 +552,34 @@ async function initializeSpectrumAnalyzer() {
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
         let lastWarn = 0;
+        let fftCounter = document.getElementById("fft-counter");
+        let avgDuration = 0;
+        const weight = 0.1; // Weight for moving average
+        let updateCounter = async function() {
+            const updatesPerSecond = 1000 / avgDuration;
+            fftCounter.textContent = `update/s: ${updatesPerSecond.toFixed(1)} (avg: ${avgDuration.toFixed(1)}ms)`;
+            setTimeout(updateCounter, 1000);
+        };
+        updateCounter();
+        
+        const tunerDisplay = document.getElementById("tunerDisplay");
+        const tunerDisplayText = document.getElementById("tunerDisplayText");
+        let updateTuner = async function() {
+            updateTunerDisplay(tunerDisplay, tunerDisplayText, pitchTracker.state);
+            setTimeout(updateTuner, 100);
+        };
+        updateTuner();
+
         let update = async function() {
             const startTime = performance.now();
             const signal = getAudioData(analyser);
             await pitchTracker.updateState(signal);
             const endTime = performance.now();
             const duration = endTime - startTime;
+            
+            // Calculate weighted moving average
+            avgDuration = (1 - weight) * avgDuration + weight * duration;
+            
             if (duration > updateIntervalMs * 1.5) {
                 const now = performance.now();
                 if (now - lastWarn > 2000) {
@@ -554,17 +591,19 @@ async function initializeSpectrumAnalyzer() {
         };
         update();
 
-        let visualize = async function() {
+        const visualize = async function() {
             const startTime = performance.now();
             // Render visualizations through their respective workers
             renderVisualization(spectrumCanvasInfo, historySize, pitchTracker.state);
-            fftDetailCanvasInfo.worker.postMessage({
-                type: 'render', 
-                data: {
-                    state: pitchTracker.state,
-                    isFFTDetail: true
-                }
-            });
+            if (showFFTDetails) {
+                fftDetailCanvasInfo.worker.postMessage({
+                    type: 'render', 
+                    data: {
+                        state: pitchTracker.state,
+                        isFFTDetail: true
+                    }
+                });
+            }
             const endTime = performance.now();
             const duration = endTime - startTime;
 
@@ -581,6 +620,77 @@ async function initializeSpectrumAnalyzer() {
         micButton.style.backgroundColor = "#ff4444";
         console.error(`you got an error: ${error}`);
     }
+}
+function frequencyToNote(frequency) {
+    const A4 = 440;  // Reference frequency for A4
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    // Calculate the number of semitones from A4
+    const semitonesFromA4 = Math.round(12 * Math.log(frequency / A4) / Math.log(2));
+    
+    // Calculate the frequency for the closest semitone
+    const closestFrequency = A4 * Math.pow(2, semitonesFromA4 / 12);
+    
+    // Determine the note name and octave
+    const noteIndex = (semitonesFromA4 + 9 + 12*100) % 12;  // 9 because A4 is the 9th note in the scale (0-indexed)
+    const octave = Math.floor((semitonesFromA4 + 9) / 12) + 4; // A4 is the 4th octave
+    
+    // Calculate the cents deviation
+    const centsDeviation = 1200 * Math.log(frequency / closestFrequency) / Math.log(2);
+
+    return {
+        note: noteNames[noteIndex],
+        octave: octave,
+        cents: centsDeviation
+    };
+}
+
+
+let tunerFreq = 0;
+const tunerFreqWeight = 0.1;
+// Update tuner display with current note and cents
+function updateTunerDisplay(tunerDisplay, tunerDisplayText, state) {
+    const centsThreshold = 5;
+
+    let freqs = state.currentFs;
+    if (freqs && freqs.length > 0) {
+        freqs = freqs.sort((a, b) => b.magnitude - a.magnitude);
+    }
+
+    let style, noteName;
+    let invalid = false;
+    let freq;
+    if (!freqs
+        || freqs.length === 0
+        || freqs[0].frequency === 0
+        // larger than 1.5x the median
+        // already sorted by magnitued
+        || freqs[0].magnitude < 2*freqs[Math.floor(freqs.length / 2)].magnitude
+    ) {
+        invalid = true;
+        freq = 0;
+    } else {
+        freq = freqs[0].frequency;
+    }
+
+    tunerFreq = tunerFreqWeight * tunerFreq + (1 - tunerFreqWeight) * freq;
+    let {note, octave, cents} = frequencyToNote(tunerFreq);
+    
+    if (!octave || octave < 0) {
+        invalid = true;
+    }
+    console.log(octave, tunerFreq, cents);
+
+    if (invalid) {
+        style = `--value: 50; --content: '-'; --primary: #777777; --secondary: #555555`
+        noteName = "-";
+    } else {
+        style = `--value: ${50+cents}; --content: '${Math.round(cents, 1)}'; --primary: ${Math.abs(cents) > centsThreshold ? '#ff4444' : '#44ff44'}; --secondary: #555555`
+        noteName = `${note} ${octave}`;
+    }
+
+    tunerDisplay.style = style;
+    tunerDisplayText.innerText = noteName;
 }
 
 // Initialize application
