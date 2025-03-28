@@ -9,8 +9,12 @@ const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", 
 // Canvases and rendering contexts
 let mainCanvas;
 let bgCanvas;
+let fftDetailCanvas;
+let fftDetailBgCanvas;
 let mainCtx;
 let bgCtx;
+let fftDetailCtx;
+let fftDetailBgCtx;
 let historySize;
 
 // Convert frequency to MIDI note number
@@ -41,7 +45,7 @@ function drawBackground() {
         bgCtx.fillStyle = "rgba(208, 215, 222, 0.5)";
         bgCtx.fillRect(35, bgCanvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
     }
-    
+
     // Draw note labels
     for (let i = 0; i < notePositions.length; i++) {
         bgCtx.fillStyle = "rgba(208, 215, 222, 1)";
@@ -74,7 +78,7 @@ function drawDynamicElements(state) {
     for (let i = 0; i < state.fHistory.length; i++) {
         if (state.fHistory[i] === null || state.fHistory[i].length == 0) continue;
         
-        const freqs = state.fHistory[i];
+        const freqs = state.fHistory[i].slice(0, 30);
         const midiNotes = frequencyToMidiNotes(freqs);
         const noteClasses = getNoteClasses(midiNotes);
         const hues = noteClasses.map(noteClass => (noteClass+3) * (360 / 12));
@@ -97,10 +101,64 @@ function drawDynamicElements(state) {
 }
 
 function renderVisualization(state) {
-    // Draw circles first (main content)
     drawDynamicElements(state);
-    // Then draw semi-transparent background on top
-    // drawBackground();
+}
+
+// Draw detailed FFT spectrum
+function renderFFTDetail(state) {
+    if (!fftDetailCanvas || !fftDetailCtx || !state.currentFs) return;
+
+    // Clear canvas
+    fftDetailCtx.fillStyle = BACKGROUND_COLOR;
+    fftDetailCtx.fillRect(0, 0, fftDetailCanvas.width, fftDetailCanvas.height);
+
+    let freqs = [...state.currentRawFs].sort((a, b) => b.magnitude - a.magnitude).slice(0, 1000);
+    const p20Magnitude = freqs.length > 0 ? freqs[freqs.length/20].magnitude : 1e9;
+    freqs = [...freqs].sort((a, b) => a.frequency - b.frequency);
+    if (freqs.length === 0) return;
+
+    const minFreq = 20;
+    const maxFreq = 20000;
+
+    // Draw frequency spectrum
+    fftDetailCtx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+    fftDetailCtx.lineWidth = 2;
+    fftDetailCtx.beginPath();
+
+    const logMinFreq = Math.log2(minFreq);
+    const logMaxFreq = Math.log2(maxFreq);
+    const logFreqRange = logMaxFreq - logMinFreq;
+
+    const dotSize = 2;
+
+
+    for (let i = 1; i < freqs.length - 1; i++) {
+        const logFreq = Math.log2(freqs[i].frequency);
+        const x = (logFreq - logMinFreq) / logFreqRange * fftDetailCanvas.width;
+        const y = fftDetailCanvas.height - (freqs[i].magnitude * fftDetailCanvas.height * 0.9);
+
+        fftDetailCtx.beginPath();
+        fftDetailCtx.arc(x, y, dotSize, 0, 2 * Math.PI);
+        fftDetailCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+        fftDetailCtx.fill();
+
+        // Peak detection (crude)
+        if (
+            freqs[i].magnitude > p20Magnitude
+            && y < fftDetailCanvas.height * (1 - 0.05)
+            && freqs[i].magnitude > freqs[i - 1].magnitude
+            && freqs[i].magnitude > freqs[i + 1].magnitude) {
+            fftDetailCtx.fillStyle = 'white';
+            fftDetailCtx.font = '12px Signika';
+            const midiNote = 12 * Math.log2(freqs[i].frequency / 440) + 69;
+            const noteName = NOTE_NAMES[Math.round(midiNote) % 12];
+            fftDetailCtx.fillText(
+                `${freqs[i].frequency.toFixed(1)} Hz (${noteName})`,
+                x,
+                y - 10
+            );
+        }
+    }
 }
 
 // Initialize the canvas when it's transferred to the worker
@@ -109,39 +167,47 @@ self.onmessage = function(e) {
     
     switch (type) {
         case 'init':
-            // Initialize canvases
-            mainCanvas = e.data.mainCanvas;
-            bgCanvas = e.data.bgCanvas;
-            historySize = e.data.historySize;
-            
-            mainCtx = mainCanvas.getContext('2d');
-            bgCtx = bgCanvas.getContext('2d');
-            
-            bgCtx.font = "20px Signika";
-            mainCtx.font = "20px Signika";
-            
-            // Draw initial background
-            drawBackground();
+            if (e.data.isFFTDetail) {
+                fftDetailCanvas = e.data.mainCanvas;
+                fftDetailBgCanvas = e.data.bgCanvas;
+                fftDetailCtx = fftDetailCanvas.getContext('2d');
+                fftDetailBgCtx = fftDetailBgCanvas.getContext('2d');
+                fftDetailCtx.font = "12px Signika";
+                historySize = e.data.historySize;
+            } else {
+                mainCanvas = e.data.mainCanvas;
+                bgCanvas = e.data.bgCanvas;
+                mainCtx = mainCanvas.getContext('2d');
+                bgCtx = bgCanvas.getContext('2d');
+                bgCtx.font = "20px Signika";
+                mainCtx.font = "20px Signika";
+                historySize = e.data.historySize;
+                drawBackground();
+            }
             break;
             
         case 'render':
-            // Render visualization with the provided state
-            renderVisualization(data.state);
+            if (data.isFFTDetail) {
+                renderFFTDetail(data.state);
+            } else {
+                renderVisualization(data.state);
+            }
             break;
             
         case 'resize':
-            // Handle canvas resize
-            mainCanvas.width = data.width;
-            mainCanvas.height = data.height;
-            bgCanvas.width = data.width;
-            bgCanvas.height = data.height;
+            if (data.isFFTDetail) {
+                fftDetailCanvas.width = data.width;
+                fftDetailCanvas.height = data.height;
+                fftDetailBgCanvas.width = data.width;
+                fftDetailBgCanvas.height = data.height;
+            } else {
+                mainCanvas.width = data.width;
+                mainCanvas.height = data.height;
+                bgCanvas.width = data.width;
+                bgCanvas.height = data.height;
+                drawBackground();
+            }
             historySize = data.historySize;
-            
-            bgCtx.font = "20px Signika";
-            mainCtx.font = "20px Signika";
-            
-            // Redraw background after resize
-            drawBackground();
             break;
     }
 };

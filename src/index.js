@@ -31,12 +31,11 @@ let currentWindow = 'hanning';
 let interpolationMethod = "parabolic"; // Changed from useParabolicInterpolation boolean to a string
 let useSpectralWhitening = false;
 let useHarmonicFiltering = false;
-let useComplexData = false; // Whether to use complex FFT data for interpolation
 
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
-let th_2 = 0.01; // Peak detection threshold
-let th_3 = 0.1; // Magnitude filtering threshold
+let th_2 = 0.001; // Peak detection threshold
+let th_3 = 0.001; // Magnitude filtering threshold
 let defaultMaxMagnitude = 0.0005; // Default maximum magnitude
 
 // Initialize WebFFT
@@ -81,12 +80,24 @@ async function detectPitch(spectrum, sampleRate) {
     let maxMagnitude = Math.max(...magnitudes);
     // console.log("maxMagnitude", maxMagnitude)
     if (maxMagnitude < th_1) {
-        return [];
+        return [[], []];
     }
 
     // Find peaks in the frequency domain
+    let rawfreqs = [];
     let freqs = [];
-    if (interpolationMethod !== "none") {
+    
+    for (let i = 1; i < frequencyBinCount; i++) {
+        const frequency = i * sampleRate / FFT_SIZE;
+        rawfreqs.push({
+            frequency: frequency,
+            magnitude: magnitudes[i]
+        });
+    }
+    
+    if (interpolationMethod === "none") {
+        freqs = JSON.parse(JSON.stringify(rawfreqs));
+    } else {
         const findPeaks = (start, end, conditionFn, peakFn) => {
             for (let i = start; i < end; i++) {
                 if (!conditionFn(i) || magnitudes[i] < th_2) {
@@ -145,17 +156,10 @@ async function detectPitch(spectrum, sampleRate) {
                 );
                 break;
         }
-    } else {
-        for (let i = 1; i < frequencyBinCount; i++) {
-            const frequency = i * sampleRate / FFT_SIZE;
-            freqs.push({
-                frequency: frequency,
-                magnitude: magnitudes[i]
-            });
-        }
     }
+    
     if (freqs.length == 0) {
-        return freqs;
+        return [rawfreqs, freqs];
     }
     
     freqs.sort((a, b) => b.magnitude - a.magnitude);
@@ -198,7 +202,7 @@ async function detectPitch(spectrum, sampleRate) {
     freqs.sort((a, b) => b.magnitude - a.magnitude);
     freqs = freqs.slice(0, 30);
     
-    return freqs;
+    return [rawfreqs, freqs];
 }
 
 // Create state manager for pitch tracking
@@ -206,7 +210,8 @@ const createPitchTracker = (historySize, sampleRate) => {
     const state = {
         fHistory: [],
         currentOctave: 1,
-        currentFs: []
+        currentFs: [],
+        currentRawFs: [],
     };
 
     function getOctave(frequency) {
@@ -217,26 +222,27 @@ const createPitchTracker = (historySize, sampleRate) => {
     async function detectPitchAndOctave(signal) {
         const complexSignal = prepareComplexArray(signal);
         const spectrum = fft.fft(complexSignal);        
-        const frequencies = await detectPitch(spectrum, sampleRate, 0.07);
+        const [rawfreqs, frequencies] = await detectPitch(spectrum, sampleRate, 0.07);
         
         if (frequencies.length == 0) {
-            return [state.currentOctave, []];
+            return [state.currentOctave, [], []];
         }
         
         // TODO: do for each note
         let octave = getOctave(frequencies[0].frequency);
         
-        return [octave, frequencies];
+        return [octave, rawfreqs, frequencies];
     }
 
     async function updateState(signal) {
-        const [octave, frequencies] = await detectPitchAndOctave(signal);
+        const [octave, rawfreqs, frequencies] = await detectPitchAndOctave(signal);
         if (state.fHistory.length >= historySize) {
             state.fHistory.shift();
         }
         if (frequencies.length > 0) {
             state.fHistory.push(frequencies);
             state.currentFs = frequencies;
+            state.currentRawFs = rawfreqs;
             
             state.currentOctave = Math.round(octave) || state.currentOctave;
         } else {
@@ -275,16 +281,18 @@ function setupCanvas(canvasId) {
         // Create a worker for rendering
         const worker = new Worker(new URL('./visualizer.worker.js', import.meta.url), { type: 'module' });
         
-        // Transfer both canvases to the worker
+        // Transfer canvases to the worker
         const mainOffscreen = mainCanvas.transferControlToOffscreen();
         const bgOffscreen = bgCanvas.transferControlToOffscreen();
+        
         const historySize = calculateHistorySize(mainCanvas.width);
         
         worker.postMessage({
             type: 'init',
             mainCanvas: mainOffscreen,
             bgCanvas: bgOffscreen,
-            historySize: historySize
+            historySize: historySize,
+            isFFTDetail: canvasId === 'fftDetailCanvas'
         }, [mainOffscreen, bgOffscreen]);
         
         // Handle window resize
@@ -431,10 +439,16 @@ async function initializeSpectrumAnalyzer() {
         const {analyser, sampleRate} = await initializeAudioAnalyzer();
         await preventScreenSleep();
         
-        // Set up canvas with OffscreenCanvas if supported
-        const canvasInfo = setupCanvas("spectrumCanvas");
-        if (!canvasInfo) {
-            throw new Error('Failed to initialize canvas');
+        // Set up main spectrum canvas with OffscreenCanvas if supported
+        const spectrumCanvasInfo = setupCanvas("spectrumCanvas");
+        if (!spectrumCanvasInfo) {
+            throw new Error('Failed to initialize spectrum canvas');
+        }
+
+        // Set up FFT detail canvas
+        const fftDetailCanvasInfo = setupCanvas("fftDetailCanvas");
+        if (!fftDetailCanvasInfo) {
+            throw new Error('Failed to initialize FFT detail canvas');
         }
         
         // Hide mic button, show record button and set up recording
@@ -505,7 +519,7 @@ async function initializeSpectrumAnalyzer() {
         // setupRecording(canvas, audioStream);
         
         // Initialize pitch tracker
-        const historySize = calculateHistorySize(canvasInfo.canvas.width);
+        const historySize = calculateHistorySize(spectrumCanvasInfo.canvas.width);
         const pitchTracker = createPitchTracker(historySize, sampleRate);
         
         let lastWarn = 0;
@@ -528,7 +542,15 @@ async function initializeSpectrumAnalyzer() {
 
         let visualize = async function() {
             const startTime = performance.now();
-            renderVisualization(canvasInfo, historySize, pitchTracker.state);
+            // Render visualizations through their respective workers
+            renderVisualization(spectrumCanvasInfo, historySize, pitchTracker.state);
+            fftDetailCanvasInfo.worker.postMessage({
+                type: 'render', 
+                data: {
+                    state: pitchTracker.state,
+                    isFFTDetail: true
+                }
+            });
             const endTime = performance.now();
             const duration = endTime - startTime;
 
