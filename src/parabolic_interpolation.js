@@ -60,6 +60,62 @@ function findInterpolatedPeak(magnitudes, peakIndex, sampleRate, fftSize) {
     };
 }
 /**
+ * Finds the interpolated peak in frequency domain using sinc interpolation
+ * @param {Float32Array} magnitudes - Array of magnitude values
+ * @param {number} peakIndex - Index of the detected peak in the magnitudes array
+ * @param {number} sampleRate - Sample rate of the audio
+ * @param {number} fftSize - Size of the FFT
+ * @param {number} lobes - Number of side lobes to use (default: 4)
+ * @param {Function} windowFn - Window function to apply (default: Hann)
+ * @returns {Object} Object containing the interpolated frequency and magnitude
+ */
+function findInterpolatedPeakSinc(magnitudes, peakIndex, sampleRate, fftSize, lobes = 4, windowFn = null) {
+    // Ensure we have enough samples for interpolation
+    if (peakIndex < lobes || peakIndex >= magnitudes.length - lobes) {
+        return {
+            frequency: peakIndex * sampleRate / fftSize,
+            magnitude: magnitudes[peakIndex]
+        };
+    }
+
+    let sum = 0;
+    let weightSum = 0;
+    
+    // Calculate sinc interpolation
+    for (let i = -lobes; i <= lobes; i++) {
+        const x = Math.PI * i;
+        let sinc = x !== 0 ? Math.sin(x) / x : 1;
+        
+        // Apply window function if provided
+        if (windowFn) {
+            const windowValue = windowFn(i / lobes);
+            sinc *= windowValue;
+        }
+        
+        sum += magnitudes[peakIndex + i] * sinc;
+        weightSum += sinc;
+    }
+
+    // Normalize
+    const interpolatedMagnitude = sum / weightSum;
+    
+    // Find fractional bin offset using parabolic interpolation on the interpolated values
+    const { p } = qint(
+        magnitudes[peakIndex - 1],
+        magnitudes[peakIndex],
+        magnitudes[peakIndex + 1]
+    );
+    
+    const interpolatedIndex = peakIndex + p;
+    const interpolatedFrequency = interpolatedIndex * sampleRate / fftSize;
+    
+    return {
+        frequency: interpolatedFrequency,
+        magnitude: interpolatedMagnitude
+    };
+}
+
+/**
  * Finds the interpolated peak in frequency domain using Quinn's Second Estimator
  * @param {Float32Array} magnitudes - Array of magnitude values
  * @param {number} peakIndex - Index of the detected peak in the magnitudes array
@@ -187,4 +243,4 @@ function trackFrequencyChangesKalman(currentPeaks, previousPeaks, maxDeltaHz = 4
     return { peaks: trackedPeaks, kalmanFilters };
 }
 
-export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, trackFrequencyChanges, trackFrequencyChangesKalman };
+export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, findInterpolatedPeakSinc, trackFrequencyChanges, KalmanFilter, trackFrequencyChangesKalman };

@@ -1,8 +1,4 @@
-import { 
-    findInterpolatedPeak, 
-    findInterpolatedPeakQuinn,
-    trackFrequencyChangesKalman 
-} from './parabolic_interpolation.js';
+import { findInterpolatedPeak, findInterpolatedPeakQuinn } from './parabolic_interpolation.js';
 import { findInterpolatedPeakQuinnComplex, findInterpolatedPeakJacobsen } from './enhanced_interpolation.js';
 import { 
     gaussianWindow, 
@@ -39,6 +35,9 @@ let useSpectralWhitening = false;
 let useHarmonicFiltering = false;
 let useKalmanFilters = false;
 
+let fftPreviousMagnitudes = null; // Store the previous FFT frame magnitudes
+let fftSmoothingFactor = 0.3; // Smoothing factor for weighted averaging 0.3*newMagnitude + 0.7*previousMagnitude
+
 // Threshold values for pitch detection
 let th_1 = 0.0001; // Minimum magnitude threshold
 let th_2 = 0.001; // Peak detection threshold
@@ -53,9 +52,9 @@ fft.profile(); // Profile to find fastest implementation
 async function preventScreenSleep() {
     try {
         await navigator.wakeLock.request("screen");
-        // console.log("Wake lock acquired.");
+        console.log("Wake lock acquired.");
     } catch (error) {
-        // console.log(`Warning: did not acquire wake lock: ${error.name}, ${error.message}`);
+        console.log(`Warning: did not acquire wake lock: ${error.name}, ${error.message}`);
     }
 }
 
@@ -98,6 +97,16 @@ async function detectPitch(spectrum, sampleRate) {
         const imag = spectrum[i*2 + 1];
         magnitudes[i] = Math.sqrt(real*real + imag*imag);
     }
+
+    // Apply weighted frame averaging
+    if (fftPreviousMagnitudes) {
+        magnitudes = magnitudes.map((magnitude, i) => {
+            return fftSmoothingFactor * magnitude + (1 - fftSmoothingFactor) * fftPreviousMagnitudes[i];
+        });
+    }
+
+    // Store the current frame for the next iteration
+    fftPreviousMagnitudes = magnitudes.slice();
 
     // Apply spectral whitening if enabled
     if (useSpectralWhitening) {
@@ -210,7 +219,7 @@ async function detectPitch(spectrum, sampleRate) {
     })
     // console.log("freqs2", JSON.parse(JSON.stringify(freqs)))
     freqs = freqs.map(f => {
-        f.magnitude = f.magnitude ** 2;
+        f.magnitude = f.magnitude ** 2.2;
         return f;
     });
     // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
@@ -397,7 +406,7 @@ async function initializeAudioAnalyzer() {
     const gainNode = audioContext.createGain();
     
     gainNode.gain.value = detectBrowser();
-    // console.log(analyzer, gainNode.gain.value);
+    console.log(analyzer, gainNode.gain.value);
     
     source.connect(gainNode).connect(analyzer);
     
@@ -528,6 +537,7 @@ async function initializeSpectrumAnalyzer() {
         const th2Slider = document.getElementById("th-2-slider");
         const th3Slider = document.getElementById("th-3-slider");
         const maxMagnitudeSlider = document.getElementById("max-magnitude-slider");
+        const fftSmoothingSlider = document.getElementById("fft-smoothing-slider");
         
         // Set initial values from JavaScript variables
         th1Slider.value = th_1;
@@ -541,6 +551,9 @@ async function initializeSpectrumAnalyzer() {
         
         maxMagnitudeSlider.value = defaultMaxMagnitude;
         document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
+
+        fftSmoothingSlider.value = fftSmoothingFactor;
+        document.getElementById("fft-smoothing-value").textContent = fftSmoothingFactor.toFixed(2);
         
         // Add event listeners for slider changes
         th1Slider.addEventListener("input", function(e) {
@@ -561,6 +574,11 @@ async function initializeSpectrumAnalyzer() {
         maxMagnitudeSlider.addEventListener("input", function(e) {
             defaultMaxMagnitude = parseFloat(e.target.value);
             document.getElementById("max-magnitude-value").textContent = defaultMaxMagnitude.toFixed(4);
+        });
+
+        fftSmoothingSlider.addEventListener("input", function(e) {
+            fftSmoothingFactor = parseFloat(e.target.value);
+            document.getElementById("fft-smoothing-value").textContent = fftSmoothingFactor.toFixed(2);
         });
         
         // setupRecording(canvas, audioStream);
@@ -697,7 +715,7 @@ function updateTunerDisplay(tunerDisplay, tunerDisplayText, state) {
     if (!octave || octave < 0) {
         invalid = true;
     }
-    // console.log(octave, tunerFreq, cents);
+    console.log(octave, tunerFreq, cents);
 
     if (invalid) {
         style = `--value: 50; --content: '-'; --primary: #777777; --secondary: #555555`
