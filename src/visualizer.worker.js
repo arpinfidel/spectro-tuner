@@ -16,7 +16,6 @@ let mainCtx;
 let bgCtx;
 let fftDetailCtx;
 let fftDetailBgCtx;
-let historySize;
 
 // Convert frequency to MIDI note number
 function frequencyToMidiNotes(frequencies) {
@@ -44,7 +43,7 @@ function drawBackground() {
     // Draw note lines
     for (let i = 0; i < notePositions.length; i++) {
         bgCtx.fillStyle = "rgba(208, 215, 222, 0.5)";
-        bgCtx.fillRect(35, bgCanvas.height - notePositions[i], historySize * HISTORY_SCALE, 1);
+        bgCtx.fillRect(35, bgCanvas.height - notePositions[i], mainCanvas.width, 1);
     }
 
     // Draw note labels
@@ -108,7 +107,7 @@ function renderVisualization(state) {
 let maxMagnitude = 0;
 // Draw detailed FFT spectrum
 function renderFFTDetail(state) {
-    if (!fftDetailCanvas || !fftDetailCtx || !state.currentFs) return;
+    if (!fftDetailCanvas || !fftDetailCtx || !state.currentFs) {return};
     if (state.currentRawFs.length === 0) return;
 
     // Clear canvas
@@ -176,7 +175,6 @@ self.onmessage = function(e) {
                 fftDetailCtx = fftDetailCanvas.getContext('2d');
                 fftDetailBgCtx = fftDetailBgCanvas.getContext('2d');
                 fftDetailCtx.font = "12px Signika";
-                historySize = e.data.historySize;
             } else {
                 mainCanvas = e.data.mainCanvas;
                 bgCanvas = e.data.bgCanvas;
@@ -184,7 +182,6 @@ self.onmessage = function(e) {
                 bgCtx = bgCanvas.getContext('2d');
                 bgCtx.font = "20px Signika";
                 mainCtx.font = "20px Signika";
-                historySize = e.data.historySize;
                 drawBackground();
             }
             break;
@@ -210,7 +207,6 @@ self.onmessage = function(e) {
                 bgCanvas.height = data.height;
                 drawBackground();
             }
-            historySize = data.historySize;
             break;
     }
 };

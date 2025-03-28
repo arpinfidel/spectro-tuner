@@ -153,8 +153,7 @@
         </div>
         
         <div class="button-container" style="margin-bottom: 20px;">
-            <button id="enable-mic-button">Enable Microphone</button>
-            <div id="interpolation-toggle" class="hidden" style="margin-left: 20px; display: flex; align-items: center; flex-wrap: wrap">
+            <div id="interpolation-selector-container" class="hidden" style="margin-left: 20px; display: flex; align-items: center; flex-wrap: wrap">
                 <select id="interpolation-select" style="margin-right: 10px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">
                     <option value="none">None</option>
                     <option value="parabolic" selected>Parabolic</option>
@@ -173,7 +172,8 @@
                     <option value="hamming">Hamming Window</option>
             </select>
             <button id="fft-details-toggle" style="margin-left: 10px;">Show FFT Details</button>
-            <div id="fft-counter" style="margin-left: 20px; color: white; font-family: monospace;">update/s: 0 (avg: 0)</div>
+            <div id="update-counter" style="margin-left: 20px; color: white; font-family: monospace;">update/s: 0 (avg: 0)</div>
+            <div id="render-counter" style="margin-left: 20px; color: white; font-family: monospace;">update/s: 0 (avg: 0)</div>
             
             <div style="width: 100%; margin-top: 10px;">
                 <div style="display: flex; align-items: center; margin-bottom: 5px;">
@@ -199,6 +199,9 @@
                 </div>
         </div>
     </div>
+</div>
+<div id="activity-status" style="position: fixed; bottom: 10px; right: 10px; padding: 5px 10px; background: rgba(0,0,0,0.7); color: white; border-radius: 4px; font-family: monospace;">
+  Active
 </div>
 </body>
 </html>
