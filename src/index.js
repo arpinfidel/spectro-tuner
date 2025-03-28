@@ -12,7 +12,9 @@ import Queue from 'yocto-queue';
 import webfft from 'webfft';
 
 // Constants for audio processing
-const FFT_SIZE = 4096*16;
+const ACTUAL_FFT_SIZE = 1 << 6;
+const PADDING_FACTOR = 1 << 6;
+const FFT_SIZE = ACTUAL_FFT_SIZE * PADDING_FACTOR;
 const HISTORY_SCALE = 1;
 const updateIntervalMs = 1000/300;
 const visualizeIntervalMs = 1000/60;
@@ -375,10 +377,18 @@ async function initializeAudioAnalyzer() {
 function getAudioData(analyzer) {
     const timeData = new Float32Array(FFT_SIZE);
     analyzer.getFloatTimeDomainData(timeData);
-    
+
     // Apply selected window function
-    return applyWindow(timeData, windows[currentWindow]);
-    
+    const windowedData = applyWindow(timeData, windows[currentWindow]);
+
+    // Zero-pad the data
+    const paddedData = new Float32Array(FFT_SIZE * PADDING_FACTOR);
+    paddedData.set(windowedData, 0); // Copy windowed data to the beginning
+    for (let i = FFT_SIZE; i < FFT_SIZE * 2; i++) {
+        paddedData[i] = 0; // Fill the rest with zeros
+    }
+
+    return paddedData;
 }
 
 // Apply spectral whitening to magnitudes
@@ -427,6 +437,10 @@ function prepareComplexArray(realSamples) {
     const complexArray = new Float32Array(FFT_SIZE * 2); // 2x size for interleaved
     for (let i = 0; i < FFT_SIZE; i++) {
         complexArray[i*2] = realSamples[i]; // Real part
+        complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
+    }
+    for (let i = FFT_SIZE; i < FFT_SIZE * 2; i++) {
+        complexArray[i*2] = 0; // Real part
         complexArray[i*2 + 1] = 0;         // Imaginary part (0 for real signals)
     }
     return complexArray;

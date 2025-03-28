@@ -2,9 +2,10 @@
 
 // Constants for visualization
 const HISTORY_SCALE = 1;
-const CIRCLE_RADIUS = 1.5;
+const CIRCLE_RADIUS = 1;
 const BACKGROUND_COLOR = "rgb(16,7,25)";
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SQUISH_FACTOR = 0.3;
 
 // Canvases and rendering contexts
 let mainCanvas;
@@ -65,7 +66,7 @@ function drawDynamicElements(state) {
         return;
     }
     
-    const shiftAmount = state.fHistory.length; 
+    const shiftAmount = Math.round(state.fHistory.length * SQUISH_FACTOR); 
     mainCtx.drawImage(mainCanvas, shiftAmount, 0, 
         mainCanvas.width - shiftAmount, mainCanvas.height,
         0, 0, mainCanvas.width - shiftAmount, mainCanvas.height);
@@ -104,16 +105,19 @@ function renderVisualization(state) {
     drawDynamicElements(state);
 }
 
+let maxMagnitude = 0;
 // Draw detailed FFT spectrum
 function renderFFTDetail(state) {
     if (!fftDetailCanvas || !fftDetailCtx || !state.currentFs) return;
+    if (state.currentRawFs.length === 0) return;
 
     // Clear canvas
     fftDetailCtx.fillStyle = BACKGROUND_COLOR;
     fftDetailCtx.fillRect(0, 0, fftDetailCanvas.width, fftDetailCanvas.height);
 
     let freqs = [...state.currentRawFs].sort((a, b) => b.magnitude - a.magnitude).slice(0, 1000);
-    const p20Magnitude = freqs.length > 0 ? freqs[freqs.length/20].magnitude : 1e9;
+    const thresholdMagnitude = freqs.length > 0 ? freqs[freqs.length*0.1].magnitude : 1e9;
+    maxMagnitude = Math.max(maxMagnitude*0.99995, freqs[0].magnitude);
     freqs = [...freqs].sort((a, b) => a.frequency - b.frequency);
     if (freqs.length === 0) return;
 
@@ -135,7 +139,7 @@ function renderFFTDetail(state) {
     for (let i = 1; i < freqs.length - 1; i++) {
         const logFreq = Math.log2(freqs[i].frequency);
         const x = (logFreq - logMinFreq) / logFreqRange * fftDetailCanvas.width;
-        const y = fftDetailCanvas.height - (freqs[i].magnitude * fftDetailCanvas.height * 0.9);
+        const y = fftDetailCanvas.height - (freqs[i].magnitude/maxMagnitude * fftDetailCanvas.height * 0.9);
 
         fftDetailCtx.beginPath();
         fftDetailCtx.arc(x, y, dotSize, 0, 2 * Math.PI);
@@ -144,8 +148,8 @@ function renderFFTDetail(state) {
 
         // Peak detection (crude)
         if (
-            freqs[i].magnitude > p20Magnitude
-            && y < fftDetailCanvas.height * (1 - 0.05)
+            freqs[i].magnitude > thresholdMagnitude
+            && y < fftDetailCanvas.height * (1 - 0.1)
             && freqs[i].magnitude > freqs[i - 1].magnitude
             && freqs[i].magnitude > freqs[i + 1].magnitude) {
             fftDetailCtx.fillStyle = 'white';
