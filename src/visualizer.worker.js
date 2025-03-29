@@ -167,46 +167,35 @@ function renderFFTDetail(state) {
 self.onmessage = function(e) {
     const { type, data } = e.data;
     
-    switch (type) {
-        case 'init':
-            if (e.data.isFFTDetail) {
-                fftDetailCanvas = e.data.mainCanvas;
-                fftDetailBgCanvas = e.data.bgCanvas;
+    if (data.isFFTDetail) {
+        switch (type) {
+            case 'init':
+                fftDetailCanvas = data.mainCanvas;
+                fftDetailBgCanvas = data.bgCanvas;
                 fftDetailCtx = fftDetailCanvas.getContext('2d');
                 fftDetailBgCtx = fftDetailBgCanvas.getContext('2d');
                 fftDetailCtx.font = "12px Signika";
-            } else {
-                mainCanvas = e.data.mainCanvas;
-                bgCanvas = e.data.bgCanvas;
+                break;
+                
+            case 'render':
+                renderFFTDetail(data.state);
+                break;
+        }
+    } else {
+        switch (type) {
+            case 'init':
+                mainCanvas = data.mainCanvas;
+                bgCanvas = data.bgCanvas;
                 mainCtx = mainCanvas.getContext('2d');
                 bgCtx = bgCanvas.getContext('2d');
                 bgCtx.font = "20px Signika";
                 mainCtx.font = "20px Signika";
                 drawBackground();
-            }
-            break;
-            
-        case 'render':
-            if (data.isFFTDetail) {
-                renderFFTDetail(data.state);
-            } else {
+                break;
+                
+            case 'render':
                 renderVisualization(data.state);
-            }
-            break;
-            
-        case 'resize':
-            if (data.isFFTDetail) {
-                fftDetailCanvas.width = data.width;
-                fftDetailCanvas.height = data.height;
-                fftDetailBgCanvas.width = data.width;
-                fftDetailBgCanvas.height = data.height;
-            } else {
-                mainCanvas.width = data.width;
-                mainCanvas.height = data.height;
-                bgCanvas.width = data.width;
-                bgCanvas.height = data.height;
-                drawBackground();
-            }
-            break;
+                break;
+        }
     }
 };

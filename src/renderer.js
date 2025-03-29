@@ -30,27 +30,13 @@ function setupCanvas(mainCanvas, bgCanvas, isFFTDetail=false) {
     
     worker.postMessage({
         type: 'init',
-        mainCanvas: mainOffscreen,
-        bgCanvas: bgOffscreen,
-        isFFTDetail: isFFTDetail,
+		data: {
+			isFFTDetail: isFFTDetail,
+			mainCanvas: mainOffscreen,
+			bgCanvas: bgOffscreen,
+		}
     }, [mainOffscreen, bgOffscreen]);
-    
-    // Handle window resize
-    window.addEventListener('resize', () => {
-        const width = mainCanvas.offsetWidth;
-        const height = mainCanvas.offsetHeight;
-        
-        // Resize canvas
-        mainCanvas.width = width;
-        mainCanvas.height = height;
-        
-        worker.postMessage({
-            type: 'resize',
-            width: width,
-            height: height,
-        });
-    });
-    
+	
     return {
         canvas: mainCanvas,
         worker,
@@ -85,8 +71,8 @@ export class Renderer {
         (isFFTDetail ? this.fftDetailCanvasInfo : this.spectrumCanvasInfo).worker.postMessage({
             type: 'render',
             data: {
-                state: state,
                 isFFTDetail: isFFTDetail,
+                state: state,
             }
         });
         state.fHistory = [];

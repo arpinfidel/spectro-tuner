@@ -31,7 +31,8 @@ let appState = {
     th_2: 0.001, // Peak detection threshold
     th_3: 0.001, // Magnitude filtering threshold
     defaultMaxMagnitude: 0.0005, // Default maximum magnitude
-    fftSmoothingFactor: 0.3, // Smoothing factor for weighted averaging 0.3*newMagnitude + 0.7*previousMagnitude
+    fftFrameSmoothingFactor: 0.6, // Smoothing factor for weighted averaging 0.6*newMagnitude + 0.4*previousMagnitude
+    fftTrackSmoothingFactor: 0.1,
 };
 
 async function preventScreenSleep() {
@@ -84,18 +85,29 @@ async function initializeAudioAnalyzer(gainValue) {
 
 function setupDOM() {
     // Add event listener for interpolation dropdown
-    document.getElementById("interpolation-select").addEventListener("change", function (e) {
+    const interpolationSelect = document.getElementById("interpolation-select")
+    interpolationSelect.addEventListener("change", function (e) {
         appState.interpolationMethod = e.target.value
     })
-    document.getElementById("spectral-whitening").addEventListener("change", function (e) {
+    interpolationSelect.value = appState.interpolationMethod
+
+    const spectralWhitening = document.getElementById("spectral-whitening")
+    spectralWhitening.addEventListener("change", function (e) {
         appState.useSpectralWhitening = e.target.checked
     })
-    document.getElementById("harmonic-filtering").addEventListener("change", function (e) {
+    spectralWhitening.checked = appState.useSpectralWhitening
+
+    const harmonicFiltering = document.getElementById("harmonic-filtering")
+    harmonicFiltering.addEventListener("change", function (e) {
         appState.useHarmonicFiltering = e.target.checked
     })
-    document.getElementById("window-select").addEventListener("change", function (e) {
+    harmonicFiltering.checked = appState.useHarmonicFiltering
+
+    const windowSelect = document.getElementById("window-select")
+    windowSelect.addEventListener("change", function (e) {
         appState.currentWindow = e.target.value
     })
+    windowSelect.value = appState.currentWindow
 
     const fftDetailsToggle = document.getElementById("fft-details-toggle")
     const fftDetailsContainer = document.querySelector("#fftDetailCanvas").parentElement
@@ -140,12 +152,20 @@ function setupDOM() {
         document.getElementById("max-magnitude-value").textContent = appState.defaultMaxMagnitude.toFixed(4)
     })
 
-    const fftSmoothingSlider = document.getElementById("fft-smoothing-slider")
-    fftSmoothingSlider.value = appState.fftSmoothingFactor
-    document.getElementById("fft-smoothing-value").textContent = appState.fftSmoothingFactor.toFixed(2)
-    fftSmoothingSlider.addEventListener("input", function (e) {
-        appState.fftSmoothingFactor = parseFloat(e.target.value)
-        document.getElementById("fft-smoothing-value").textContent = appState.fftSmoothingFactor.toFixed(2)
+    const fftFrameSmoothingSlider = document.getElementById("fft-frame-smoothing-slider")
+    fftFrameSmoothingSlider.value = appState.fftFrameSmoothingFactor
+    document.getElementById("fft-frame-smoothing-value").textContent = appState.fftFrameSmoothingFactor.toFixed(2)
+    fftFrameSmoothingSlider.addEventListener("input", function (e) {
+        appState.fftFrameSmoothingFactor = parseFloat(e.target.value)
+        document.getElementById("fft-frame-smoothing-value").textContent = appState.fftFrameSmoothingFactor.toFixed(2)
+    })
+
+    const fftTrackSmoothingSlider = document.getElementById("fft-track-smoothing-slider")
+    fftTrackSmoothingSlider.value = appState.fftTrackSmoothingFactor
+    document.getElementById("fft-track-smoothing-value").textContent = appState.fftTrackSmoothingFactor.toFixed(2)
+    fftTrackSmoothingSlider.addEventListener("input", function (e) {
+        appState.fftTrackSmoothingFactor = parseFloat(e.target.value)
+        document.getElementById("fft-track-smoothing-value").textContent = appState.fftTrackSmoothingFactor.toFixed(2)
     })
 
     const spectrumCanvas = document.getElementById("spectrumCanvas");

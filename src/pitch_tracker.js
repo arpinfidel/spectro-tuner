@@ -20,24 +20,24 @@ function applySpectralWhitening(magnitudes) {
     return magnitudes;
 }
 
-function filterHarmonics(frequencies, tolerance = 0.05) {
+function filterHarmonics(frequencies, tolerance = 0.02) {
     if (frequencies.length === 0) return [];
     
     // Sort by magnitude
     frequencies.sort((a, b) => b.magnitude - a.magnitude);
     
-    // Consider the first three strongest peaks as potential fundamentals
-    const potentialFundamentals = frequencies.slice(0, 3).map(peak => peak.frequency);
+    // Consider the first strongest peaks as potential fundamentals
+    const potentialFundamentals = frequencies.slice(0, 5).map(peak => peak.frequency);
     
     // Filter out frequencies that are likely harmonics
     return frequencies.map(peak => {
+        if (peak.magnitude/frequencies[0].magnitude < 0.1) return peak;
         for (const potentialFundamental of potentialFundamentals) {
-            for (let harmonic = 2; harmonic <= 10; harmonic++) {
+            for (let harmonic = 2; harmonic <= 5; harmonic++) {
                 const harmonicFreq = potentialFundamental * harmonic;
                 const relativeError = Math.abs(peak.frequency - harmonicFreq) / harmonicFreq;
-                
                 if (relativeError < tolerance) {
-                    peak.magnitude *= 0.7; // This is likely a harmonic
+                    peak.magnitude *= relativeError ** 0.2; // This is likely a harmonic
                 }
             }
         }
@@ -74,20 +74,25 @@ export class PitchTracker {
     avgDuration = 0;
     previousMagnitudes = null; // Store the previous FFT frame magnitudes
 	windows
+	tracks = [];
     
     constructor(appState, { updateCounter }, { analyzer }, { fftSize, paddingFactor, sampleRate, historySize }) {
         this.appState = appState;
 
+		// DOM
         this.updateCounter = updateCounter;
         
+		// config
 		this.fftSize = fftSize;
 		this.paddingFactor = paddingFactor;
 		this.historySize = historySize;
         
+		// deps
 		this.analyzer = analyzer;
 		this.fft = new webfft(fftSize);
 		this.fft.profile(); // Profile to find fastest implementation
 		
+		// vars
         this.sampleRate = sampleRate;
 		this.windows = {
 			'hanning': hanningWindow(fftSize),
@@ -155,9 +160,9 @@ export class PitchTracker {
         }
 
         // Apply weighted frame averaging
-        if (this.previousMagnitudes) {
+        if (this.appState.fftFrameSmoothingFactor > 1e-9 && this.previousMagnitudes) {
             magnitudes = magnitudes.map((magnitude, i) => {
-                return this.appState.fftSmoothingFactor * magnitude + (1 - this.appState.fftSmoothingFactor) * this.previousMagnitudes[i];
+                return this.appState.fftFrameSmoothingFactor * this.previousMagnitudes[i] + (1 - this.appState.fftFrameSmoothingFactor) * magnitude;
             });
         }
 
@@ -259,40 +264,60 @@ export class PitchTracker {
         if (this.appState.useHarmonicFiltering) {
             freqs = filterHarmonics(freqs);
         }
-        // console.log("freqs1", JSON.parse(JSON.stringify(freqs)))
-        
-        // remove subharmonics
-        // freqs = freqs.filter(f => !isSubharmonic(f.frequency, freqs.map(f => f.frequency)));
-        // console.log("freqs2", freqs)
 
-        // maxMagnitude = Math.max(...freqs.map(f => f.magnitude));
-        // console.log("maxMagnitude", maxMagnitude)
-        const max2Magnitude = Math.max(this.appState.defaultMaxMagnitude, freqs.length > 1 ? freqs[1].magnitude : 1);
+        const max2Magnitude = Math.max(this.appState.defaultMaxMagnitude, freqs.length > 1 ? freqs[0].magnitude : 1);
         freqs = freqs.map(f => {
             f.magnitude = Math.min(1, f.magnitude / max2Magnitude);
             return f;
         })
-        // console.log("freqs2", JSON.parse(JSON.stringify(freqs)))
         freqs = freqs.map(f => {
             f.magnitude = f.magnitude ** 2.2;
             return f;
         });
-        // console.log("freqs3", JSON.parse(JSON.stringify(freqs)))
         freqs = freqs.filter(f => f.frequency >= 30 && f.magnitude >= this.appState.th_3)
 
-        // const minMagnitude = Math.min(...freqs.map(f => f.magnitude));
-        // if (minMagnitude < 1) {
-        //     freqs = freqs.map(f => {
-        //         f.magnitude = (f.magnitude - minMagnitude) / (1 - minMagnitude);
-        //         // f.magnitude = f.magnitude * 0.8 + 0.2;
-        //         return f;
-        //     })
-        // }
-        
         freqs = freqs.filter(f => !isNaN(f.frequency) && !isNaN(f.magnitude));
         freqs.sort((a, b) => b.magnitude - a.magnitude);
         freqs = freqs.slice(0, 30);
         
+        if (this.appState.fftTrackSmoothingFactor) {
+            const candidates = this.tracks.map(() => []);
+
+            for (let i = 0; i < freqs.length; i++) {
+                let found = false;
+                for (let j = 0; j < this.tracks.length; j++) {
+                    const freq = freqs[i];
+                    const track = this.tracks[j];
+                    if (Math.max(freq.frequency, track.frequency) / Math.min(freq.frequency, track.frequency) > 1.05) {
+                        continue;
+                    }
+                    found = true;
+                    candidates[j].push({ frequency: freq.frequency, magnitude: freq.magnitude });
+                    const distance = Math.abs(freq.frequency - track.frequency);
+                    const strength = (this.appState.fftTrackSmoothingFactor * track.magnitude / freq.magnitude * 1.5) * Math.exp(-distance / 100);
+                    freq.frequency = strength * track.frequency + (1 - strength) * freq.frequency;
+                }
+                if (!found) {
+                    this.tracks.push({ frequency: freqs[i].frequency, magnitude: freqs[i].magnitude });
+                    candidates.push([{ frequency: freqs[i].frequency, magnitude: freqs[i].magnitude }]);
+                }
+            }
+
+            const newTracks = [];
+            for (let i = 0; i < candidates.length; i++) {
+                const sumMagnitude = candidates[i].reduce((a, b) => a + b.magnitude, 0);
+                const sumFrequency = candidates[i].reduce((a, b) => a + b.magnitude * b.frequency, 0);
+                if (sumMagnitude > 0) {
+                    newTracks.push({
+                        frequency: sumFrequency / sumMagnitude,
+                        magnitude: sumMagnitude / candidates[i].length,
+                    });
+                }
+            }
+
+            this.tracks = newTracks;
+        }
+
         return [rawfreqs, freqs];
     }
 
