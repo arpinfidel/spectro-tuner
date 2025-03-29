@@ -1,6 +1,7 @@
 # Tuner
+![image](https://github.com/user-attachments/assets/9abf08e2-5427-4e99-9ecf-7fb382933552)
 
-A web-based audio spectrum analyzer and tuner application.
+A web-based audio spectrum analyzer and tuner application. Inspired by PitchLab tuner.
 
 ## Description
 
@@ -25,7 +26,6 @@ Open `index.html` in your browser.
 ## Dependencies
 
 - webfft
-- yocto-queue
 
 ## Features
 
