@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="https://cmp.gatekeeperconsent.com/min.js" data-cfasync="false"></script>
+    <script src="https://the.gatekeeperconsent.com/cmp.min.js" data-cfasync="false"></script>
+    <script async src="//www.ezojs.com/ezoic/sa.min.js"></script>
+    <script>
+        window.ezstandalone = window.ezstandalone || {};
+        ezstandalone.cmd = ezstandalone.cmd || [];
+    </script>
+
     <meta http-equiv="Cache-Control" content="max-age=2592000, must-revalidate">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -146,7 +154,9 @@
             <canvas id="spectrumCanvas" style="position: absolute; top: 0; left: 0;"></canvas>
             <canvas id="spectrumCanvasBackground" style="position: absolute; top: 0; left: 0;"></canvas>
         </div>
-        
+        <!-- Ezoic - incontent_5 - incontent_5 -->
+        <div id="ezoic-pub-ad-placeholder-115"></div>
+        <!-- End Ezoic - incontent_5 - incontent_5 -->
         <div class="canvas-container" style="position: relative; height: 300px; margin-top: 20px;">
             <canvas id="fftDetailCanvas" style="position: absolute; top: 0; left: 0;"></canvas>
             <canvas id="fftDetailCanvasBackground" style="position: absolute; top: 0; left: 0;"></canvas>
@@ -201,7 +211,13 @@
     </div>
 </div>
 <div id="activity-status" style="position: fixed; bottom: 10px; right: 10px; padding: 5px 10px; background: rgba(0,0,0,0.7); color: white; border-radius: 4px; font-family: monospace;">
-  Active
+    Active
 </div>
 </body>
+<script>
+    ezstandalone.cmd.push(function() {
+        console.log("ads ready");
+        ezstandalone.showAds();
+    });
+</script>
 </html>
