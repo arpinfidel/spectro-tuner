@@ -1,7 +1,7 @@
 import webfft from 'webfft'
 import { getOctave, make_loop } from './util'
 import { applyWindow, blackmanHarrisWindow, flatTopWindow, gaussianWindow, hammingWindow, hanningWindow } from './window_functions'
-import { findInterpolatedPeak, findInterpolatedPeakQuinn } from './parabolic_interpolation'
+import { findInterpolatedPeak, findInterpolatedPeakQuinn, findEnhancedInterpolatedPeak } from './parabolic_interpolation'
 import { findInterpolatedPeakJacobsen, findInterpolatedPeakQuinnComplex } from './enhanced_interpolation'
 
 
@@ -438,6 +438,16 @@ export class PitchTracker {
                             && magnitudes[i] > magnitudes[i-2]
                             && magnitudes[i] > magnitudes[i+2],
                         i => findInterpolatedPeakJacobsen(spectrum, i, this.sampleRate, this.fftSize),
+                    );
+                    break;
+                case "enhanced":
+                    findPeaks(3, frequencyBinCount - 2,
+                        i =>
+                            magnitudes[i] > magnitudes[i-1]
+                            && magnitudes[i] > magnitudes[i+1]
+                            && magnitudes[i] > magnitudes[i-2]
+                            && magnitudes[i] > magnitudes[i+2],
+                        i => findEnhancedInterpolatedPeak(magnitudes, i, this.sampleRate, this.fftSize),
                     );
                     break;
             }

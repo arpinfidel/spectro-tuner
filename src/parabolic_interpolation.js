@@ -4,8 +4,35 @@
  */
 
 /**
- * Performs quadratic interpolation of three adjacent samples
+ * Performs enhanced quadratic interpolation of five adjacent samples
+ * @param {number} ym2 - Sample two bins before the peak
  * @param {number} ym1 - Sample before the peak
+ * @param {number} y0 - Peak sample
+ * @param {number} yp1 - Sample after the peak
+ * @param {number} yp2 - Sample two bins after the peak
+ * @returns {Object} Object containing the refined peak position, height, and half-curvature
+ */
+function enhancedQint(ym2, ym1, y0, yp1, yp2) {
+    // Standard quadratic interpolation using three bins
+    const p = (yp1 - ym1) / (2 * (2 * y0 - yp1 - ym1));
+
+    // Apply conservative bias correction using the outer bins
+    const correction = 0.15 * (yp2 - ym2) / (yp1 - ym1);
+    // Limit correction to prevent overcompensation
+    const p_corrected = p + Math.max(-0.1, Math.min(0.1, correction));
+
+    // Interpolated peak magnitude
+    const y = y0 - 0.25 * (ym1 - yp1) * p_corrected;
+
+    // Half-curvature estimation
+    const a = 0.5 * (ym1 - 2 * y0 + yp1);
+
+    return { p: p_corrected, y, a };
+}
+
+/**
+ * Performs quadratic interpolation of three adjacent samples
+ * @param {number} ym1 - Sample before the peak 
  * @param {number} y0 - Peak sample
  * @param {number} yp1 - Sample after the peak
  * @returns {Object} Object containing the interpolated peak position, height, and half-curvature
@@ -243,4 +270,42 @@ function trackFrequencyChangesKalman(currentPeaks, previousPeaks, maxDeltaHz = 4
     return { peaks: trackedPeaks, kalmanFilters };
 }
 
-export { qint, findInterpolatedPeak, findInterpolatedPeakQuinn, findInterpolatedPeakSinc, trackFrequencyChanges, KalmanFilter, trackFrequencyChangesKalman };
+/**
+ * Finds the interpolated peak in frequency domain using enhanced parabolic interpolation
+ * @param {Float32Array} magnitudes - Array of magnitude values
+ * @param {number} peakIndex - Index of the detected peak in the magnitudes array
+ * @param {number} sampleRate - Sample rate of the audio
+ * @param {number} fftSize - Size of the FFT
+ * @returns {Object} Object containing the interpolated frequency and magnitude
+ */
+function findEnhancedInterpolatedPeak(magnitudes, peakIndex, sampleRate, fftSize) {
+    // Ensure we have valid indices for interpolation
+    if (peakIndex <= 1 || peakIndex >= magnitudes.length - 2) {
+        // If we can't interpolate, return the original peak
+        return {
+            frequency: peakIndex * sampleRate / fftSize,
+            magnitude: magnitudes[peakIndex]
+        };
+    }
+
+    // Get the five points for interpolation
+    const ym2 = magnitudes[peakIndex - 2];
+    const ym1 = magnitudes[peakIndex - 1];
+    const y0 = magnitudes[peakIndex];
+    const yp1 = magnitudes[peakIndex + 1];
+    const yp2 = magnitudes[peakIndex + 2];
+
+    // Perform enhanced quadratic interpolation
+    const { p, y } = enhancedQint(ym2, ym1, y0, yp1, yp2);
+
+    // Calculate the interpolated frequency
+    const interpolatedIndex = peakIndex + p;
+    const interpolatedFrequency = interpolatedIndex * sampleRate / fftSize;
+
+    return {
+        frequency: interpolatedFrequency,
+        magnitude: y
+    };
+}
+
+export { qint, enhancedQint, findInterpolatedPeak, findEnhancedInterpolatedPeak, findInterpolatedPeakQuinn, findInterpolatedPeakSinc, trackFrequencyChanges, KalmanFilter, trackFrequencyChangesKalman };
