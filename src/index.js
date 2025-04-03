@@ -1,3 +1,8 @@
+// Check for debug parameter in URL and dynamically import eruda if needed
+if (new URLSearchParams(window.location.search).get('debug') === 'true') {
+    import('eruda').then(eruda => eruda.default.init());
+}
+
 import { Tuner } from './tuner.js';
 import { PitchTracker } from './pitch_tracker.js'
 import { Renderer } from './renderer.js'
@@ -262,7 +267,3 @@ async function main() {
 document.addEventListener('DOMContentLoaded', async () => {
     main();
 });
-
-// if (import.meta.env.MODE === 'development') {
-  import('eruda').then(eruda => eruda.default.init());
-// }
