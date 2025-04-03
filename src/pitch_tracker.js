@@ -327,7 +327,7 @@ export class PitchTracker {
         const [rawfreqs, frequencies] = await this.detectPitch(spectrum, this.sampleRate, 0.07);
         
         if (frequencies.length == 0) {
-            return [state.currentOctave, [], []];
+            return [this.state.currentOctave, [], []];
         }
         
         // TODO: do for each note

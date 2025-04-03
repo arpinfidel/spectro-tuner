@@ -178,7 +178,7 @@ self.onmessage = function(e) {
                 break;
                 
             case 'render':
-                renderFFTDetail(data.state);
+                if (data.state) renderFFTDetail(data.state);
                 break;
         }
     } else {
